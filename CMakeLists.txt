@@ -23,3 +23,9 @@ SOAPY_SDR_MODULE_UTIL(
     SOURCES
     SoapyTCPRemote.cpp
 )
+
+add_executable(SoapyTCPServer
+    SoapyTCPServer.cpp
+)
+include(GNUInstallDirs)
+install(TARGETS SoapyTCPServer DESTINATION ${CMAKE_INSTALL_BINDIR})
