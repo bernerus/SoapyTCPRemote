@@ -27,5 +27,9 @@ SOAPY_SDR_MODULE_UTIL(
 add_executable(SoapyTCPServer
     SoapyTCPServer.cpp
 )
+target_link_libraries(SoapyTCPServer
+    SoapySDR
+    pthread
+)
 include(GNUInstallDirs)
 install(TARGETS SoapyTCPServer DESTINATION ${CMAKE_INSTALL_BINDIR})

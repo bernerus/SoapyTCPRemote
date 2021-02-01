@@ -12,17 +12,12 @@
 #include <sys/socket.h>
 #include <netdb.h>
 
-// map of format names to frame sizes
-static std::map<std::string, size_t> s_frameSizes = {
-    { "CS8", 2 }, { "CS16", 4 }, { "CF32", 8 },
-};
-
 // declare the contents of a Stream object for ourselves
 class SoapySDR::Stream
 {
 public:
     FILE* dataFp;
-    int remoteFd;
+    int remoteId;
     int numChans;
     size_t fSize;
     bool running;
@@ -164,7 +159,7 @@ std::vector<std::string> SoapyTCPRemote::getStreamFormats(const int direction, c
 std::string SoapyTCPRemote::getNativeStreamFormat(const int direction, const size_t channel, double &fullScale) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getNativeStreamFormat()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_STREAM_FORMATS);
+    int status = rpc->writeInteger(TCPREMOTE_GET_STREAM_NATIVE_FORMAT);
     if (status>0)
         status = rpc->writeInteger(direction);
     if (status>0)
@@ -203,11 +198,45 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
     SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::setupStream(%d,%s,%d,...)",
         direction, format.c_str(), channels.size());
     // first check we have a frame size for the format
-    if (s_frameSizes.find(format)==s_frameSizes.end()) {
+    if (g_frameSizes.find(format)==g_frameSizes.end()) {
         SoapySDR_log(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, unknown sample format");
         return nullptr;
     }
+    // in order to help the remote side associate the data stream with the setup call,
+    // we create the data connection *first*, then send it's remoteId as the first
+    // parameter to the RPC call..
+    int data = connect();
+    if (data<0) {
+        SoapySDR_log(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, data stream failed to connect");
+        return nullptr;
+    }
+    // sending one of TCPREMOTE_DATA_<x> makes this a data stream in the remote
+    char dir[10];
+    int dlen = sprintf(dir, "%d\n", SOAPY_SDR_RX==direction? TCPREMOTE_DATA_SEND : TCPREMOTE_DATA_RECV);
+    if (write(data, dir, dlen)!=dlen) {
+        SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, failed to write data stream type: %s",
+            strerror(errno));
+        close(data);
+        return nullptr;
+    }
+    dlen = read(data, dir, sizeof(dir));
+    if (dlen<=0) {
+        SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, failed to read data stream remoteId: %s",
+            strerror(errno));
+        close(data);
+        return nullptr;
+    }
+    SoapySDR::Stream *rv = new SoapySDR::Stream();
+    dir[dlen]=0;
+    sscanf(dir, "%d", &rv->remoteId);
+    rv->dataFp = fdopen(data, SOAPY_SDR_RX==direction? "r": "w");
+    rv->fSize = g_frameSizes.at(format);
+    rv->numChans = channels.size();
+    rv->running = false;
+    // make the RPC call with the remoteId
     int status = rpc->writeInteger(TCPREMOTE_SETUP_STREAM);
+    if (status>0)
+        status = rpc->writeInteger(rv->remoteId);
     if (status>0)
         status = rpc->writeInteger(direction);
     if (status>0)
@@ -225,35 +254,9 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
     if (status>0)
         status = rpc->writeKwargs(args);
     if (status>0)
-        status = rpc->writeString("=");
-    SoapySDR::Stream *rv = nullptr;
-    if (status>0) {
-        // now connect data stream in appropriate direction
-        int data = connect();
-        if (data<0) {
-            SoapySDR_log(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, data stream failed to connect");
-            return nullptr;
-        }
-        // sending one of TCPREMOTE_DATA_<x> marks this connection as a data stream in the receiver
-        char dir[10];
-        int dlen = sprintf(dir, "%d\n", SOAPY_SDR_RX==direction? TCPREMOTE_DATA_SEND : TCPREMOTE_DATA_RECV);
-        if (write(data, dir, dlen)!=dlen) {
-            SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, failed to write data direction: %s",
-                strerror(errno));
-            close(data);
-            return nullptr;
-        }
-        rv = new SoapySDR::Stream();
-        rv->dataFp = fdopen(data, SOAPY_SDR_RX==direction? "r": "w");
-        rv->fSize = s_frameSizes[format];
-        rv->numChans = channels.size();
-        rv->running = false;
-    }
-    // *after* data connection established, we expect a success response
-    if (status>0)
         status = rpc->readInteger();
-    if (status>0) {
-        rv->remoteFd = status;
+    if (status>=0) {
+        SoapySDR_logf(SOAPY_SDR_TRACE,"SoapyTCPRemote::setupStream, data stream remoteId: %d", rv->remoteId);
     } else {
         SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, error: %d", status);
         if (rv)
@@ -268,6 +271,7 @@ void SoapyTCPRemote::closeStream(SoapySDR::Stream *stream)
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::closeStream()");
     if (stream->running)
         deactivateStream(stream);
+    rpc->writeInteger(TCPREMOTE_CLOSE_STREAM);
     fclose(stream->dataFp);
     delete stream;
 }
@@ -275,7 +279,9 @@ void SoapyTCPRemote::closeStream(SoapySDR::Stream *stream)
 size_t SoapyTCPRemote::getStreamMTU(SoapySDR::Stream *stream) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getStreamMTU()");
-    rpc->writeInteger(TCPREMOTE_GET_STREAM_MTU);
+    int status = rpc->writeInteger(TCPREMOTE_GET_STREAM_MTU);
+    if (status>0)
+        status = rpc->writeInteger(stream->remoteId);
     return rpc->readInteger();
 }
 
@@ -289,7 +295,7 @@ int SoapyTCPRemote::activateStream(SoapySDR::Stream *stream,
         return 0;
     int status = rpc->writeInteger(TCPREMOTE_ACTIVATE_STREAM);
     if (status>0)
-        status = rpc->writeInteger(stream->remoteFd);
+        status = rpc->writeInteger(stream->remoteId);
     if (status>0)
         status = rpc->readInteger();
     if (status>0)
@@ -304,7 +310,7 @@ int SoapyTCPRemote::deactivateStream(SoapySDR::Stream *stream, const int flags, 
         return 0;
     int status = rpc->writeInteger(TCPREMOTE_DEACTIVATE_STREAM);
     if (status>0)
-        status = rpc->writeInteger(stream->remoteFd);
+        status = rpc->writeInteger(stream->remoteId);
     if (status>0)
         status = rpc->readInteger();
     if (status>0)

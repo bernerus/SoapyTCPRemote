@@ -13,6 +13,38 @@
 #include <stdio.h>
 #include <string.h>
 
+// map of format names to frame sizes
+const std::map<std::string, size_t> g_frameSizes = {
+    { "CS8", 2 }, { "CS16", 4 }, { "CF32", 8 },
+};
+
+// RPC codes
+enum
+{
+    // internal specials - socket type identifier, single digit value please..
+    TCPREMOTE_RPC_LOAD,
+    TCPREMOTE_DATA_SEND,
+    TCPREMOTE_DATA_RECV,
+    // identification API
+    TCPREMOTE_GET_HARDWARE_KEY,
+    TCPREMOTE_GET_HARDWARE_INFO,
+    // channel API
+    TCPREMOTE_GET_NUM_CHANNELS,
+    TCPREMOTE_GET_CHANNEL_INFO,
+    // stream API
+    TCPREMOTE_GET_STREAM_FORMATS,
+    TCPREMOTE_GET_STREAM_NATIVE_FORMAT,
+    TCPREMOTE_GET_STREAM_ARGS_INFO,
+    TCPREMOTE_SETUP_STREAM,
+    TCPREMOTE_CLOSE_STREAM,
+    TCPREMOTE_GET_STREAM_MTU,
+    TCPREMOTE_ACTIVATE_STREAM,
+    TCPREMOTE_DEACTIVATE_STREAM,
+#if 0
+    //All the other remote methods..
+#endif
+};
+
 class SoapyRPC
 {
 public:
