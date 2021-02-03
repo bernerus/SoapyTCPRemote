@@ -35,11 +35,10 @@ public:
     std::string getHardwareKey() const;
     SoapySDR::Kwargs getHardwareInfo(void) const;
 
-    // Channels API (most remote)
+    // Channels API (all remote)
     size_t getNumChannels(const int dir) const;
     SoapySDR::Kwargs getChannelInfo(const int direction, const size_t channel) const;
-    // NB: we only support RX, so this always returns false
-    bool getFullDuplex(const int direction, const size_t channel) const { return false; }
+    bool getFullDuplex(const int direction, const size_t channel) const;
 
     // Stream API (all remote)
     std::vector<std::string> getStreamFormats(const int direction, const size_t channel) const;
@@ -55,24 +54,33 @@ public:
                        const size_t numElems = 0);
     int deactivateStream(SoapySDR::Stream *stream, const int flags = 0, const long long timeNs = 0);
 
+    // local methods, streams data to/from remote
     int readStream(SoapySDR::Stream *stream,
                    void * const *buffs,
                    const size_t numElems,
                    int &flags,
                    long long &timeNs,
                    const long timeoutUs = 100000);
-    // writeStream - not implemented
-    // readStreamStatus - not implemented
+    int writeStream(SoapySDR::Stream *stream,
+                    const void * const *buffs,
+                    const size_t numElems,
+                    int &flags,
+                    const long long timeNs = 0,
+                    const long timeoutUs = 100000);
+    int readStreamStatus(
+                    SoapySDR::Stream *stream,
+                    size_t &chanMask,
+                    int &flags,
+                    long long &timeNs,
+                    const long timeoutUs = 100000);
 
-    // Direct Buffer Access API (local, and nope!)
+    // Direct Buffer Access API (nope!)
     size_t getNumDirectAccessBuffers(SoapySDR::Stream *stream) const { return 0; }
 
-    // Antennas (all remote)
-    std::vector<std::string> listAntennas(const int direction, const size_t channel) const;
-    void setAntenna(const int direction, const size_t channel, const std::string &name);
-    std::string getAntenna(const int direction, const size_t channel) const;
+    // Antennas (not yet!)
+    std::vector<std::string> listAntennas(const int direction, const size_t channel) const { std::vector<std::string> l; return l; }
 
-    // DC offset, IQ balance & Frequency correction (local, nope)
+    // DC offset, IQ balance & Frequency correction (not yet!)
     bool hasDCOffsetMode(const int direction, const size_t channel) const { return false; }
     bool hasDCOffset(const int direction, const size_t channel) const { return false; }
     bool hasIQBalanceMode(const int direction, const size_t channel) const { return false; }
@@ -84,28 +92,37 @@ public:
     bool hasGainMode(const int direction, const size_t channel) const;
     void setGainMode(const int direction, const size_t channel, const bool automatic);
     bool getGainMode(const int direction, const size_t channel) const;
+    void setGain(const int direction, const size_t channel, const double value);
     void setGain(const int direction, const size_t channel, const std::string &name, const double value);
+    double getGain(const int direction, const size_t channel) const;
     double getGain(const int direction, const size_t channel, const std::string &name) const;
+    SoapySDR::Range getGainRange(const int direction, const size_t channel) const;
     SoapySDR::Range getGainRange(const int direction, const size_t channel, const std::string &name) const;
 
     // Frequency (all remote)
     void setFrequency(const int direction,
                       const size_t channel,
+                      const double frequency,
+                      const SoapySDR::Kwargs &args = SoapySDR::Kwargs());
+    void setFrequency(const int direction,
+                      const size_t channel,
                       const std::string &name,
                       const double frequency,
                       const SoapySDR::Kwargs &args = SoapySDR::Kwargs());
+    double getFrequency(const int direction, const size_t channel) const;
     double getFrequency(const int direction, const size_t channel, const std::string &name) const;
     std::vector<std::string> listFrequencies(const int direction, const size_t channel) const;
+    SoapySDR::RangeList getFrequencyRange(const int direction, const size_t channel) const;
     SoapySDR::RangeList getFrequencyRange(const int direction, const size_t channel, const std::string &name) const;
-    // local and nothing to see here
-    SoapySDR::ArgInfoList getFrequencyArgsInfo(const int direction, const size_t channel) const { SoapySDR::ArgInfoList l; return l; }
+    SoapySDR::ArgInfoList getFrequencyArgsInfo(const int direction, const size_t channel) const;
 
     // Sample Rate API (all remote)
     void setSampleRate(const int direction, const size_t channel, const double rate);
     double getSampleRate(const int direction, const size_t channel) const;
     std::vector<double> listSampleRates(const int direction, const size_t channel) const;
+    SoapySDR::RangeList getSampleRateRange(const int direction, const size_t channel) const;
 
-    // Bandwidth, Clocking, Time, Sensor, Register & Setting APIs (not implemented)
+    // Bandwidth, Clocking, Time, Sensor, Register, Settings, GPIO, I2C, SPI, UART APIs (not yet!)
 };
 
 #endif /* SoapyTCPRemote_hpp */
