@@ -189,6 +189,24 @@ int handleGetHardwareInfo(ConnectionInfo &conn) {
     return 0;
 }
 
+int handleSetFrontendMapping(ConnectionInfo &conn) {
+    // pass-thru
+    conn.dev->setFrontendMapping(
+        conn.rpc->readInteger(),
+        conn.rpc->readString());
+    return 0;
+}
+
+int handleGetFrontendMapping(ConnectionInfo &conn) {
+    // pass-thru
+    conn.rpc->writeString(
+        conn.dev->getFrontendMapping(
+            conn.rpc->readInteger()
+        )
+    );
+    return 0;
+}
+
 int handleGetNumChannels(ConnectionInfo &conn) {
     // pass-thru
     conn.rpc->writeInteger(conn.dev->getNumChannels(conn.rpc->readInteger()));
@@ -199,6 +217,17 @@ int handleGetChannelInfo(ConnectionInfo &conn) {
     // pass-thru
     conn.rpc->writeKwargs(
         conn.dev->getChannelInfo(
+            conn.rpc->readInteger(),
+            conn.rpc->readInteger()
+        )
+    );
+    return 0;
+}
+
+int handleGetFullDuplex(ConnectionInfo &conn) {
+    // pass-thru
+    conn.rpc->writeInteger(
+        conn.dev->getFullDuplex(
             conn.rpc->readInteger(),
             conn.rpc->readInteger()
         )
@@ -318,12 +347,12 @@ int handleActivateStream(ConnectionInfo &conn) {
     ConnectionInfo &data = s_connections.at(dataId);
     pthread_t pid;
     if (pthread_create(&pid, nullptr, dataPump, &data)) {
-        SoapySDR_logf(SOAPY_SDR_ERROR, "activateStream: failed to start data pump thread: %s", strerror(errno));
-        conn.rpc->writeInteger(-1);
+        SoapySDR_logf(SOAPY_SDR_ERROR, "activateStream: failed to create data pump thread: %s", strerror(errno));
+        conn.rpc->writeInteger(-2);
         return 0;
     }
     data.pid = pid;
-    conn.rpc->writeInteger(1);
+    conn.rpc->writeInteger(0);
     return 0;
 }
 
@@ -339,11 +368,139 @@ int handleDeactivateStream(ConnectionInfo &conn) {
     pthread_t pid = data.pid;
     data.pid = 0;
     if (pthread_join(pid, nullptr)) {
-        SoapySDR_logf(SOAPY_SDR_ERROR, "activateStream: failed to stop data pump thread: %s", strerror(errno));
-        conn.rpc->writeInteger(-1);
+        SoapySDR_logf(SOAPY_SDR_ERROR, "deactivateStream: failed to join data pump thread: %s", strerror(errno));
+        conn.rpc->writeInteger(-2);
         return 0;
     }
-    conn.rpc->writeInteger(1);
+    conn.rpc->writeInteger(0);
+    return 0;
+}
+
+int handleListAntennas(ConnectionInfo &conn) {
+    // pass-thru
+    conn.rpc->writeStrVector(
+        conn.dev->listAntennas(
+            conn.rpc->readInteger(),
+            conn.rpc->readInteger()
+        )
+    );
+    return 0;
+}
+
+int handleSetAntenna(ConnectionInfo &conn) {
+    // pass-thru
+    conn.dev->setAntenna(conn.rpc->readInteger(), conn.rpc->readInteger(), conn.rpc->readString());
+    return 0;
+}
+
+int handleGetAntenna(ConnectionInfo &conn) {
+    // pass-thru
+    conn.rpc->writeString(
+        conn.dev->getAntenna(
+            conn.rpc->readInteger(),
+            conn.rpc->readInteger()
+        )
+    );
+    return 0;
+}
+
+int handleListGains(ConnectionInfo &conn){
+    // pass-thru
+    conn.rpc->writeStrVector(
+        conn.dev->listGains(
+            conn.rpc->readInteger(),
+            conn.rpc->readInteger()
+        )
+    );
+    return 0;
+}
+
+int handleHasGainMode(ConnectionInfo &conn) {
+    // pass-thru
+    conn.rpc->writeInteger(
+        conn.dev->hasGainMode(
+            conn.rpc->readInteger(),
+            conn.rpc->readInteger()
+        )
+    );
+    return 0;
+}
+
+int handleSetGainMode(ConnectionInfo &conn) {
+    // pass-thru
+    conn.dev->setGainMode(conn.rpc->readInteger(), conn.rpc->readInteger(), conn.rpc->readInteger()>0);
+    return 0;
+}
+
+int handleGetGainMode(ConnectionInfo &conn) {
+    // pass-thru
+    conn.rpc->writeInteger(
+        conn.dev->getGainMode(
+            conn.rpc->readInteger(),
+            conn.rpc->readInteger()
+        )
+    );
+    return 0;
+}
+
+int handleSetGain(ConnectionInfo &conn) {
+    // pass-thru
+    conn.dev->setGain(conn.rpc->readInteger(), conn.rpc->readInteger(), (double)conn.rpc->readInteger());
+    return 0;
+}
+
+int handleSetGainNamed(ConnectionInfo &conn) {
+    // pass-thru
+    conn.dev->setGain(conn.rpc->readInteger(), conn.rpc->readInteger(),
+        conn.rpc->readString(), (double)conn.rpc->readInteger());
+    return 0;
+}
+
+int handleGetGain(ConnectionInfo &conn) {
+    // pass-thru
+    conn.rpc->writeInteger(
+        (int)conn.dev->getGain(
+            conn.rpc->readInteger(),
+            conn.rpc->readInteger()
+        )
+    );
+    return 0;
+}
+
+int handleGetGainNamed(ConnectionInfo &conn) {
+    // pass-thru
+    conn.rpc->writeInteger(
+        (int)conn.dev->getGain(
+            conn.rpc->readInteger(),
+            conn.rpc->readInteger(),
+            conn.rpc->readString()
+        )
+    );
+    return 0;
+}
+
+int handleGetGainRange(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR::Range r = conn.dev->getGainRange(
+        conn.rpc->readInteger(),
+        conn.rpc->readInteger()
+    );
+    conn.rpc->writeInteger((int)r.minimum());
+    conn.rpc->writeInteger((int)r.maximum());
+    conn.rpc->writeInteger((int)r.step());
+    return 0;
+}
+
+int handleGetGainRangeNamed(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR::Range r = conn.dev->getGainRange(
+        conn.rpc->readInteger(),
+        conn.rpc->readInteger(),
+        conn.rpc->readString()
+    );
+    conn.rpc->writeInteger((int)r.minimum());
+    conn.rpc->writeInteger((int)r.maximum());
+    conn.rpc->writeInteger((int)r.step());
     return 0;
 }
 
@@ -357,16 +514,34 @@ int handleRPC(struct pollfd *pfd) {
     ConnectionInfo &conn = s_connections.at(pfd->fd);
     // dispatch requested RPC..
     int call = conn.rpc->readInteger();
+    if (call<0) {
+        SoapySDR_log(SOAPY_SDR_ERROR, "EOf or error in RPC socket");
+        return -1;
+    }
     SoapySDR_logf(SOAPY_SDR_TRACE, "handleRPC: call=%d", call);
     switch (call) {
+    // unknown
+    default:
+        SoapySDR_logf(SOAPY_SDR_ERROR,"Unknown RPC call: %d", call);
+        conn.rpc->writeInteger(-1000);
+        return -1;
+    // identification API
     case TCPREMOTE_GET_HARDWARE_KEY:
         return handleGetHardwareKey(conn);
     case TCPREMOTE_GET_HARDWARE_INFO:
         return handleGetHardwareInfo(conn);
+    // channel API
+    case TCPREMOTE_SET_FRONTEND_MAPPING:
+        return handleSetFrontendMapping(conn);
+    case TCPREMOTE_GET_FRONTEND_MAPPING:
+        return handleGetFrontendMapping(conn);
     case TCPREMOTE_GET_NUM_CHANNELS:
         return handleGetNumChannels(conn);
     case TCPREMOTE_GET_CHANNEL_INFO:
         return handleGetChannelInfo(conn);
+    case TCPREMOTE_GET_FULL_DUPLEX:
+        return handleGetFullDuplex(conn);
+    // stream API
     case TCPREMOTE_GET_STREAM_FORMATS:
         return handleGetStreamFormats(conn);
     case TCPREMOTE_GET_STREAM_NATIVE_FORMAT:
@@ -383,42 +558,35 @@ int handleRPC(struct pollfd *pfd) {
         return handleActivateStream(conn);
     case TCPREMOTE_DEACTIVATE_STREAM:
         return handleDeactivateStream(conn);
-    default:
-        SoapySDR_logf(SOAPY_SDR_ERROR,"Unknown RPC call: %d", call);
-        conn.rpc->writeInteger(-1);
-/*  TODO!! All these!!
-    // channel API
-    TCPREMOTE_SET_FRONTEND_MAPPING,
-    TCPREMOTE_GET_FRONTEND_MAPPING,
-    TCPREMOTE_GET_FULL_DUPLEX,
     // antenna API
-    TCPREMOTE_LIST_ANTENNAS,
-    TCPREMOTE_SET_ANTENNA,
-    TCPREMOTE_GET_ANTENNA,
-    // frontend corrections API
-    TCPREMOTE_HAS_DC_OFFSET_MODE,
-    TCPREMOTE_SET_DC_OFFSET_MODE,
-    TCPREMOTE_GET_DC_OFFSET_MODE,
-    TCPREMOTE_HAS_DC_OFFSET,
-    TCPREMOTE_SET_DC_OFFSET,
-    TCPREMOTE_GET_DC_OFFSET,
-    TCPREMOTE_HAS_IQ_BALANCE,
-    TCPREMOTE_SET_IQ_BALANCE,
-    TCPREMOTE_GET_IQ_BALANCE,
-    TCPREMOTE_HAS_FREQUENCY_CORRECTION,
-    TCPREMOTE_SET_FREQUENCY_CORRECTION,
-    TCPREMOTE_GET_FREQUENCY_CORRECTION,
+    case TCPREMOTE_LIST_ANTENNAS:
+        return handleListAntennas(conn);
+    case TCPREMOTE_SET_ANTENNA:
+        return handleSetAntenna(conn);
+    case TCPREMOTE_GET_ANTENNA:
+        return handleGetAntenna(conn);
     // gain API
-    TCPREMOTE_LIST_GAINS,
-    TCPREMOTE_HAS_GAIN_MODE,
-    TCPREMOTE_SET_GAIN_MODE,
-    TCPREMOTE_GET_GAIN_MODE,
-    TCPREMOTE_SET_GAIN,
-    TCPREMOTE_SET_GAIN_NAMED,
-    TCPREMOTE_GET_GAIN,
-    TCPREMOTE_GET_GAIN_NAMED,
-    TCPREMOTE_GET_GAIN_RANGE,
-    TCPREMOTE_GET_GAIN_RANGE_NAMED,
+    case TCPREMOTE_LIST_GAINS:
+        return handleListGains(conn);
+    case TCPREMOTE_HAS_GAIN_MODE:
+        return handleHasGainMode(conn);
+    case TCPREMOTE_SET_GAIN_MODE:
+        return handleSetGainMode(conn);
+    case TCPREMOTE_GET_GAIN_MODE:
+        return handleGetGainMode(conn);
+    case TCPREMOTE_SET_GAIN:
+        return handleSetGain(conn);
+    case TCPREMOTE_SET_GAIN_NAMED:
+        return handleSetGainNamed(conn);
+    case TCPREMOTE_GET_GAIN:
+        return handleGetGain(conn);
+    case TCPREMOTE_GET_GAIN_NAMED:
+        return handleGetGainNamed(conn);
+    case TCPREMOTE_GET_GAIN_RANGE:
+        return handleGetGainRange(conn);
+    case TCPREMOTE_GET_GAIN_RANGE_NAMED:
+        return handleGetGainRangeNamed(conn);
+/*  TODO!! All these!!
     // frequency API
     TCPREMOTE_SET_FREQUENCY,
     TCPREMOTE_SET_FREQUENCY_NAMED,
@@ -432,7 +600,22 @@ int handleRPC(struct pollfd *pfd) {
     TCPREMOTE_SET_SAMPLE_RATE,
     TCPREMOTE_GET_SAMPLE_RATE,
     // list rates deprecated, we emulate in client side
-    TCPREMOTE_GET_SAMPLE_RATE_RANGE,
+    TCPREMOTE_GET_SAMPLE_RATE_RANGE, */
+
+    /* NOT IMPLEMENTED ON CLIENT YET!
+    // frontend corrections API
+    TCPREMOTE_HAS_DC_OFFSET_MODE,
+    TCPREMOTE_SET_DC_OFFSET_MODE,
+    TCPREMOTE_GET_DC_OFFSET_MODE,
+    TCPREMOTE_HAS_DC_OFFSET,
+    TCPREMOTE_SET_DC_OFFSET,
+    TCPREMOTE_GET_DC_OFFSET,
+    TCPREMOTE_HAS_IQ_BALANCE,
+    TCPREMOTE_SET_IQ_BALANCE,
+    TCPREMOTE_GET_IQ_BALANCE,
+    TCPREMOTE_HAS_FREQUENCY_CORRECTION,
+    TCPREMOTE_SET_FREQUENCY_CORRECTION,
+    TCPREMOTE_GET_FREQUENCY_CORRECTION,
     // bandwidth API
     TCPREMOTE_SET_BANDWIDTH,
     TCPREMOTE_GET_BANDWIDTH,

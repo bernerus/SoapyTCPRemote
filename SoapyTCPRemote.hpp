@@ -36,6 +36,8 @@ public:
     SoapySDR::Kwargs getHardwareInfo(void) const;
 
     // Channels API (all remote)
+    void setFrontendMapping(const int direction, const std::string &mapping);
+    std::string getFrontendMapping(const int direction) const;
     size_t getNumChannels(const int dir) const;
     SoapySDR::Kwargs getChannelInfo(const int direction, const size_t channel) const;
     bool getFullDuplex(const int direction, const size_t channel) const;

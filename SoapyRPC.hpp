@@ -146,17 +146,25 @@ enum
     TCPREMOTE_READ_UART
 };
 
+// Design notes:
+// - holds error state, to ensure no further I/O is attempted once errored,
+//   this allows strerror()/perror() to work despite subsequent rpc methods
+//   and allows error to be detected at the end of a series of rpc methods
 class SoapyRPC
 {
 public:
     SoapyRPC(int socket) {
+        hasError = false;
         handle = fdopen(socket, "r+");
         if (handle)
             setlinebuf(handle);
-        else
+        else {
             SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyRPC::<cons>, failed to fdopen socket: %s", strerror(errno));
+            hasError = true;
+        }
     }
     SoapyRPC(FILE *fp) {
+        hasError = false;
         handle = fp;
         setlinebuf(handle);
     }
@@ -165,24 +173,59 @@ public:
             fclose(handle);
     }
     int writeInteger(const int i) {
-        return fprintf(handle, "%d\n", i);
+        if (hasError) return -1;
+        int r = fprintf(handle, "%d\n", i);
+        if (r<0) {
+            SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyRPC::writeInteger: %s", strerror(errno));
+            hasError = true;
+        }
+        return r;
     }
     int writeString(const std::string s) {
-        return fprintf(handle, "%s\n", s.c_str());
+        if (hasError) return -1;
+        int r = fprintf(handle, "%s\n", s.c_str());
+        if (r<0) {
+            SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyRPC::writeString: %s", strerror(errno));
+            hasError = true;
+        }
+        return r;
     }
     int writeKwargs(const SoapySDR::Kwargs &args) {
-        int n = 0;
+        if (hasError) return -1;
+        int n = 0, r;
         for (auto it=args.begin(); it!=args.end(); ++it) {
             std::string nv;
             nv += it->first;
             nv += '=';
             nv += it->second;
-            n += writeString(nv);
+            r = writeString(nv);
+            if (r<0)
+                return r;
+            n += r;
         }
-        n += writeString("=");      // terminator
+        r = writeString("=");      // terminator
+        if (r<0)
+            return r;
+        n += r;
+        return n;
+    }
+    int writeStrVector(const std::vector<std::string> &vec) {
+        if (hasError) return -1;
+        int n = 0, r;
+        for (auto it: vec) {
+            r = writeString(it);
+            if (r<0)
+                return r;
+            n += r;
+        }
+        r = writeString("");
+        if (r<0)
+            return r;
+        n += r;
         return n;
     }
     int readInteger() {
+        if (hasError) return -1;
         int rv=-1;
         std::string s = readString();
         if (s.length()>0)
@@ -194,15 +237,19 @@ public:
     std::string readString() {
         char line[256];
         std::string rv;
+        if (hasError) return rv;
         if (fgets(line, sizeof(line), handle)) {
             line[strlen(line)-1] = 0;
             rv = line;
-        } else
-            SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyRPC::readString, failed to read data: %s", strerror(errno));
+        } else {
+            SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyRPC::readString: %s", strerror(errno));
+            hasError = true;
+        }
         return rv;
     }
     SoapySDR::Kwargs readKwargs() {
         SoapySDR::Kwargs args;
+        if (hasError) return args;
         while (true) {
             std::string nv = readString();
             if (nv.length()<2)      // '=' or empty is a terminator
@@ -218,6 +265,7 @@ public:
     }
     std::vector<std::string> readStrVector() {
         std::vector<std::string> list;
+        if (hasError) return list;
         while (true) {
             // blank/error indicates end of list
             std::string str = readString();
@@ -230,6 +278,7 @@ public:
 
 private:
     FILE *handle;
+    bool hasError;
 };
 
 #endif

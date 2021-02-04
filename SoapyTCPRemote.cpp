@@ -85,18 +85,10 @@ int SoapyTCPRemote::loadRemoteDriver() const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::loadRemoteDriver()");
     // identify this connection as an RPC stream load the remote driver
-    int status = rpc->writeInteger(TCPREMOTE_RPC_LOAD);
-    if (status>0)
-        status = rpc->writeString(remoteDriver);
-    if (status>0)
-        status = rpc->writeString(remoteArgs);
-    if (status>0)
-        status = rpc->readInteger();
-    if (status<0) {
-        SoapySDR_logf(SOAPY_SDR_ERROR, "Failed to load remote driver: %s(%s)=%d",
-            remoteDriver.c_str(), remoteArgs.c_str(), status);
-    }
-    return status;
+    rpc->writeInteger(TCPREMOTE_RPC_LOAD);
+    rpc->writeString(remoteDriver);
+    rpc->writeString(remoteArgs);
+    return rpc->readInteger();
 }
 
 // Identification API
@@ -115,63 +107,65 @@ SoapySDR::Kwargs SoapyTCPRemote::getHardwareInfo() const
 }
 
 // Channels API
+void SoapyTCPRemote::setFrontendMapping(const int direction, const std::string &mapping)
+{
+    SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::setFrontendMapping()");
+    rpc->writeInteger(TCPREMOTE_SET_FRONTEND_MAPPING);
+    rpc->writeInteger(direction);
+    rpc->writeString(mapping);
+}
+
+std::string SoapyTCPRemote::getFrontendMapping(const int direction) const
+{
+    SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getFrontendMapping()");
+    rpc->writeInteger(TCPREMOTE_GET_FRONTEND_MAPPING);
+    rpc->writeInteger(direction);
+    return rpc->readString();
+}
+
 size_t SoapyTCPRemote::getNumChannels(const int dir) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getNumChannels()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_NUM_CHANNELS);
-    if (status>0)
-        status = rpc->writeInteger(dir);
-    if (status>0)
-        status = rpc->readInteger();
-    return status;
+    rpc->writeInteger(TCPREMOTE_GET_NUM_CHANNELS);
+    rpc->writeInteger(dir);
+    return rpc->readInteger();
 }
 
 SoapySDR::Kwargs SoapyTCPRemote::getChannelInfo(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getChannelInfo()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_CHANNEL_INFO);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_GET_CHANNEL_INFO);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     return rpc->readKwargs();
 }
 
 bool SoapyTCPRemote::getFullDuplex(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getFullDuplex()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_FULL_DUPLEX);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    return rpc->readInteger()!=0;
+    rpc->writeInteger(TCPREMOTE_GET_FULL_DUPLEX);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    return rpc->readInteger()>0;
 }
 
 std::vector<std::string> SoapyTCPRemote::getStreamFormats(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getStreamFormats()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_STREAM_FORMATS);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_GET_STREAM_FORMATS);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     return rpc->readStrVector();
 }
 
 std::string SoapyTCPRemote::getNativeStreamFormat(const int direction, const size_t channel, double &fullScale) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getNativeStreamFormat()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_STREAM_NATIVE_FORMAT);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    std::string fmt;
-    if (status>0)
-        fmt = rpc->readString();
-    if (fmt.length()>0)
-        status = rpc->readInteger(); // assumes integer full scale??
+    rpc->writeInteger(TCPREMOTE_GET_STREAM_NATIVE_FORMAT);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    std::string fmt = rpc->readString();
+    int status = rpc->readInteger(); // assumes integer full scale??
     if (status>0)
         fullScale = (double)status;
     return fmt;
@@ -180,13 +174,11 @@ std::string SoapyTCPRemote::getNativeStreamFormat(const int direction, const siz
 SoapySDR::ArgInfoList SoapyTCPRemote::getStreamArgsInfo(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getStreamArgsInfo()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_STREAM_ARGS_INFO);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_GET_STREAM_ARGS_INFO);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     SoapySDR::ArgInfoList info;
-    while (status>0) {
+    while (true) {
         // fugly complex structure to serialise... maybe later!
         std::string s = rpc->readString();
         if (s.length()==0)
@@ -237,34 +229,27 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
     rv->numChans = channels.size();
     rv->running = false;
     // make the RPC call with the remoteId
-    int status = rpc->writeInteger(TCPREMOTE_SETUP_STREAM);
-    if (status>0)
-        status = rpc->writeInteger(rv->remoteId);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeString(format);
-    if (status>0) {
-        // channel list, sent as a space separated list of numbers on one line
-        std::string chans;
-        for (auto it=channels.begin(); it!=channels.end(); ++it) {
-            if (chans.length()>0)
-                chans += " ";
-            chans += std::to_string(*it);
-        }
-        status = rpc->writeString(chans);
+    rpc->writeInteger(TCPREMOTE_SETUP_STREAM);
+    rpc->writeInteger(rv->remoteId);
+    rpc->writeInteger(direction);
+    rpc->writeString(format);
+    // channel list, sent as a space separated list of numbers on one line
+    std::string chans;
+    for (auto it=channels.begin(); it!=channels.end(); ++it) {
+        if (chans.length()>0)
+            chans += " ";
+        chans += std::to_string(*it);
     }
-    if (status>0)
-        status = rpc->writeKwargs(args);
-    if (status>0)
-        status = rpc->readInteger();
+    rpc->writeString(chans);
+    rpc->writeKwargs(args);
+    int status = rpc->readInteger();
     if (status>=0) {
         SoapySDR_logf(SOAPY_SDR_TRACE,"SoapyTCPRemote::setupStream, data stream remoteId: %d", rv->remoteId);
     } else {
         SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, error: %d", status);
         if (rv)
             closeStream(rv);
-        return nullptr;
+        rv = nullptr;
     }
     return rv;
 }
@@ -282,9 +267,8 @@ void SoapyTCPRemote::closeStream(SoapySDR::Stream *stream)
 size_t SoapyTCPRemote::getStreamMTU(SoapySDR::Stream *stream) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getStreamMTU()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_STREAM_MTU);
-    if (status>0)
-        status = rpc->writeInteger(stream->remoteId);
+    rpc->writeInteger(TCPREMOTE_GET_STREAM_MTU);
+    rpc->writeInteger(stream->remoteId);
     return rpc->readInteger();
 }
 
@@ -296,12 +280,10 @@ int SoapyTCPRemote::activateStream(SoapySDR::Stream *stream,
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::activateStream()");
     if (stream->running)
         return 0;
-    int status = rpc->writeInteger(TCPREMOTE_ACTIVATE_STREAM);
-    if (status>0)
-        status = rpc->writeInteger(stream->remoteId);
-    if (status>0)
-        status = rpc->readInteger();
-    if (status>0)
+    rpc->writeInteger(TCPREMOTE_ACTIVATE_STREAM);
+    rpc->writeInteger(stream->remoteId);
+    int status = rpc->readInteger();
+    if (status==0)
         stream->running = true;
     return status;
 }
@@ -311,12 +293,10 @@ int SoapyTCPRemote::deactivateStream(SoapySDR::Stream *stream, const int flags, 
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::deactivateStream()");
     if (!stream->running)
         return 0;
-    int status = rpc->writeInteger(TCPREMOTE_DEACTIVATE_STREAM);
-    if (status>0)
-        status = rpc->writeInteger(stream->remoteId);
-    if (status>0)
-        status = rpc->readInteger();
-    if (status>0)
+    rpc->writeInteger(TCPREMOTE_DEACTIVATE_STREAM);
+    rpc->writeInteger(stream->remoteId);
+    int status = rpc->readInteger();
+    if (status==0)
         stream->running = false;
     return status;
 }
@@ -407,108 +387,83 @@ std::vector<std::string> SoapyTCPRemote::listGains(const int direction, const si
 {
     //list available gain element names,
     //the functions below have a "name" parameter
-    int status = rpc->writeInteger(TCPREMOTE_LIST_GAINS);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_LIST_GAINS);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
      return rpc->readStrVector();
 }
 
 bool SoapyTCPRemote::hasGainMode(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::hasGainMode()");
-    int status = rpc->writeInteger(TCPREMOTE_HAS_GAIN_MODE);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    if (status>0)
-        status = rpc->readInteger();
-    return status!=0;
+    rpc->writeInteger(TCPREMOTE_HAS_GAIN_MODE);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    return rpc->readInteger()>0;
 }
 
 void SoapyTCPRemote::setGainMode(const int direction, const size_t channel, const bool automatic)
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::setGainMode()");
-    int status = rpc->writeInteger(TCPREMOTE_SET_GAIN_MODE);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    if (status>0)
-        status = rpc->writeInteger(automatic?1:0);
+    rpc->writeInteger(TCPREMOTE_SET_GAIN_MODE);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    rpc->writeInteger(automatic?1:0);
 }
 
 bool SoapyTCPRemote::getGainMode(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getGainMode()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_GAIN_MODE);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_GET_GAIN_MODE);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     return rpc->readInteger()>0;
 }
 
 void SoapyTCPRemote::setGain(const int direction, const size_t channel, const double value)
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::setGain()");
-    int status = rpc->writeInteger(TCPREMOTE_SET_GAIN);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    if (status>0)
-        status = rpc->writeInteger((int)value);
+    rpc->writeInteger(TCPREMOTE_SET_GAIN);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    rpc->writeInteger((int)value);
 }
 
 void SoapyTCPRemote::setGain(const int direction, const size_t channel, const std::string &name, const double value)
 {
-    SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::setGain(named)");
-    int status = rpc->writeInteger(TCPREMOTE_SET_GAIN_NAMED);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    if (status>0)
-        status = rpc->writeString(name);
-    if (status>0)
-        status = rpc->writeInteger((int)value);
+    SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::setGain(%s)", name.c_str());
+    rpc->writeInteger(TCPREMOTE_SET_GAIN_NAMED);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    rpc->writeString(name);
+    rpc->writeInteger((int)value);
 }
 
 double SoapyTCPRemote::getGain(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getGain()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_GAIN);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_GET_GAIN);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     return (double)rpc->readInteger();
 }
 
 double SoapyTCPRemote::getGain(const int direction, const size_t channel, const std::string &name) const
 {
-    SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getGain(named)");
-    int status = rpc->writeInteger(TCPREMOTE_GET_GAIN_NAMED);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    if (status>0)
-        status = rpc->writeString(name);
+    SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::getGain(%s)", name.c_str());
+    rpc->writeInteger(TCPREMOTE_GET_GAIN_NAMED);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    rpc->writeString(name);
     return (double)rpc->readInteger();
 }
 
 SoapySDR::Range SoapyTCPRemote::getGainRange(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getGainRange()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_GAIN_RANGE);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_GET_GAIN_RANGE);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     return SoapySDR::Range(
         (double)rpc->readInteger(),
         (double)rpc->readInteger(),
@@ -518,14 +473,11 @@ SoapySDR::Range SoapyTCPRemote::getGainRange(const int direction, const size_t c
 
 SoapySDR::Range SoapyTCPRemote::getGainRange(const int direction, const size_t channel, const std::string &name) const
 {
-    SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getGainRange(named)");
-    int status = rpc->writeInteger(TCPREMOTE_GET_GAIN_RANGE_NAMED);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    if (status>0)
-        status = rpc->writeString(name);
+    SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::getGainRange(%s)", name.c_str());
+    rpc->writeInteger(TCPREMOTE_GET_GAIN_RANGE_NAMED);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    rpc->writeString(name);
     return SoapySDR::Range(
         (double)rpc->readInteger(),
         (double)rpc->readInteger(),
@@ -540,15 +492,11 @@ void SoapyTCPRemote::setFrequency(const int direction,
                               const SoapySDR::Kwargs &args)
 {
     SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::setFrequency(%f)", frequency);
-    int status = rpc->writeInteger(TCPREMOTE_SET_FREQUENCY);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    if (status>0)
-        status = rpc->writeInteger((int)frequency);
-    if (status>0)
-        status = rpc->writeKwargs(args);
+    rpc->writeInteger(TCPREMOTE_SET_FREQUENCY);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    rpc->writeInteger((int)frequency);
+    rpc->writeKwargs(args);
 }
 
 void SoapyTCPRemote::setFrequency(const int direction,
@@ -558,61 +506,47 @@ void SoapyTCPRemote::setFrequency(const int direction,
                               const SoapySDR::Kwargs &args)
 {
     SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::setFrequency(%s,%f)", name.c_str(), frequency);
-    int status = rpc->writeInteger(TCPREMOTE_SET_FREQUENCY_NAMED);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    if (status>0)
-        status = rpc->writeString(name);
-    if (status>0)
-        status = rpc->writeInteger((int)frequency);
-    if (status>0)
-        status = rpc->writeKwargs(args);
+    rpc->writeInteger(TCPREMOTE_SET_FREQUENCY_NAMED);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    rpc->writeString(name);
+    rpc->writeInteger((int)frequency);
+    rpc->writeKwargs(args);
 }
 
 double SoapyTCPRemote::getFrequency(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getFrequency()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_FREQUENCY);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_GET_FREQUENCY);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     return (double)rpc->readInteger();
 }
 
 double SoapyTCPRemote::getFrequency(const int direction, const size_t channel, const std::string &name) const
 {
     SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::getFrequency(%s)", name.c_str());
-    int status = rpc->writeInteger(TCPREMOTE_GET_FREQUENCY_NAMED);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    if (status>0)
-        status = rpc->writeString(name);
+    rpc->writeInteger(TCPREMOTE_GET_FREQUENCY_NAMED);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    rpc->writeString(name);
     return (double)rpc->readInteger();
 }
 
 std::vector<std::string> SoapyTCPRemote::listFrequencies(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::listFrequencies");
-    int status = rpc->writeInteger(TCPREMOTE_LIST_FREQUENCIES);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_LIST_FREQUENCIES);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     return rpc->readStrVector();
 }
 SoapySDR::RangeList SoapyTCPRemote::getFrequencyRange(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getFrequencyRange()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_FREQUENCY_RANGE);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_GET_FREQUENCY_RANGE);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     // read triplets of beg/end/step until step<=0
     SoapySDR::RangeList list;
     while (true) {
@@ -630,13 +564,10 @@ SoapySDR::RangeList SoapyTCPRemote::getFrequencyRange(const int direction, const
 SoapySDR::RangeList SoapyTCPRemote::getFrequencyRange(const int direction, const size_t channel, const std::string &name) const
 {
     SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::getFrequencyRange(%s)", name.c_str());
-    int status = rpc->writeInteger(TCPREMOTE_GET_FREQUENCY_RANGE_NAMED);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    if (status>0)
-        status = rpc->writeString(name);
+    rpc->writeInteger(TCPREMOTE_GET_FREQUENCY_RANGE_NAMED);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    rpc->writeString(name);
     // read triplets of beg/end/step until step<=0
     SoapySDR::RangeList list;
     while (true) {
@@ -652,15 +583,13 @@ SoapySDR::RangeList SoapyTCPRemote::getFrequencyRange(const int direction, const
 
 SoapySDR::ArgInfoList SoapyTCPRemote::getFrequencyArgsInfo(const int direction, const size_t channel) const
 {
-    SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getFrequencyRange()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_FREQUENCY_ARGS_INFO);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getFrequencyArgsInfo()");
+    rpc->writeInteger(TCPREMOTE_GET_FREQUENCY_ARGS_INFO);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     // TODO: parse complex structure!
     SoapySDR::ArgInfoList list;
-    while (status>0) {
+    while (true) {
         // fugly complex structure to serialise... maybe later!
         std::string s = rpc->readString();
         if (s.length()==0)
@@ -673,23 +602,18 @@ SoapySDR::ArgInfoList SoapyTCPRemote::getFrequencyArgsInfo(const int direction, 
 void SoapyTCPRemote::setSampleRate(const int direction, const size_t channel, const double rate)
 {
     SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::setSampleRate(%f)", rate);
-    int status = rpc->writeInteger(TCPREMOTE_SET_SAMPLE_RATE);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
-    if (status>0)
-        status = rpc->writeInteger((int)rate);
+    rpc->writeInteger(TCPREMOTE_SET_SAMPLE_RATE);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    rpc->writeInteger((int)rate);
 }
 
 double SoapyTCPRemote::getSampleRate(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getSampleRate()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_SAMPLE_RATE);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_GET_SAMPLE_RATE);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     return (double)rpc->readInteger();
 }
 
@@ -709,11 +633,9 @@ std::vector<double> SoapyTCPRemote::listSampleRates(const int direction, const s
 SoapySDR::RangeList SoapyTCPRemote::getSampleRateRange(const int direction, const size_t channel) const
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getSampleRateRange()");
-    int status = rpc->writeInteger(TCPREMOTE_GET_SAMPLE_RATE_RANGE);
-    if (status>0)
-        status = rpc->writeInteger(direction);
-    if (status>0)
-        status = rpc->writeInteger(channel);
+    rpc->writeInteger(TCPREMOTE_GET_SAMPLE_RATE_RANGE);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
     SoapySDR::RangeList list;
     // read triplets of beg/end/step until step<=0
     while (true) {
@@ -721,7 +643,7 @@ SoapySDR::RangeList SoapyTCPRemote::getSampleRateRange(const int direction, cons
         int end = rpc->readInteger();
         int step = rpc->readInteger();
         if (step<=0)
-        break;
+            break;
         list.push_back(SoapySDR::Range((double)beg,(double)end,(double)step));
     }
     return list;
