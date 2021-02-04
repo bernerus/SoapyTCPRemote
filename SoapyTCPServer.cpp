@@ -22,7 +22,7 @@ struct ConnectionInfo
     SoapySDR::Device *dev;
     FILE *netFp;
     int direction;
-    int rate;
+    double rate;
     size_t fSize;
     size_t numChans;
     SoapySDR::Stream *stream;
@@ -32,11 +32,10 @@ struct ConnectionInfo
 static std::map<int, ConnectionInfo> s_connections;
 
 int createRpc(int sock) {
-    SoapySDR_log(SOAPY_SDR_TRACE, "createRpc");
+    SoapySDR_log(SOAPY_SDR_DEBUG, "createRpc()");
     ConnectionInfo conn;
     conn.rpc = new SoapyRPC(sock);
-    // TODO: BODGE!!
-    conn.rate = 192000;
+    conn.rate = 0;
     // read driver and args..
     SoapySDR::Kwargs kwargs;
     kwargs["driver"] = conn.rpc->readString();
@@ -67,11 +66,12 @@ int createRpc(int sock) {
     // all good - add to map and respond with map key
     s_connections[sock] = conn;
     conn.rpc->writeInteger(sock);
+    SoapySDR_logf(SOAPY_SDR_INFO, "New RPC connection: %d", sock);
     return 0;
 }
 
 int createData(int sock, int type) {
-    SoapySDR_logf(SOAPY_SDR_TRACE, "createData, type: %d", type);
+    SoapySDR_logf(SOAPY_SDR_DEBUG, "createData, type: %d", type);
     ConnectionInfo conn;
     conn.rpc = nullptr;     // ensure we aren't treated as RPC stream
     conn.netFp = fdopen(sock,TCPREMOTE_DATA_SEND==type? "w": "r");
@@ -86,6 +86,7 @@ int createData(int sock, int type) {
     char id[10];
     int ilen = sprintf(id,"%d\n",sock);
     write(sock, id, ilen);
+    SoapySDR_logf(SOAPY_SDR_INFO, "New data connection: %d", sock);
     return 0;
 }
 
@@ -99,7 +100,7 @@ void *dataPump(void *ctx) {
     // which direction?
     if (SOAPY_SDR_RX==conn->direction) {
         // calculate appropriate element count and block sizes for ~4Hz read rate
-        size_t numElems = conn->rate / 4;
+        size_t numElems = (int)(conn->rate / 4.0);
         size_t blkSize = numElems * conn->fSize;
         size_t bufSize = blkSize * conn->numChans;
         // allocate buffers for channel data and serialised network data
@@ -112,7 +113,8 @@ void *dataPump(void *ctx) {
         while (conn->pid!=0) {
             int flags = 0;
             long long time = 0;
-            int nread = conn->dev->readStream(conn->stream, buffs, numElems, flags, time);
+            long timeout = 1000000; // 1 second
+            int nread = conn->dev->readStream(conn->stream, buffs, numElems, flags, time, timeout);
             if (nread<0) {
                 SoapySDR_logf(SOAPY_SDR_ERROR, "dataPump: error reading underlying stream: %d", nread);
                 break;
@@ -179,67 +181,72 @@ int handleListen(struct pollfd *pfd) {
 
 int handleGetHardwareKey(ConnectionInfo &conn) {
     // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetHardwareKey()");
     conn.rpc->writeString(conn.dev->getHardwareKey());
     return 0;
 }
 
 int handleGetHardwareInfo(ConnectionInfo &conn) {
     // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetHardwareInfo()");
     conn.rpc->writeKwargs(conn.dev->getHardwareInfo());
     return 0;
 }
 
 int handleSetFrontendMapping(ConnectionInfo &conn) {
     // pass-thru
-    conn.dev->setFrontendMapping(
-        conn.rpc->readInteger(),
-        conn.rpc->readString());
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleSetFrontendMapping()");
+    // NB: Do NOT try and be clever and NEST the reads as device method arguments..
+    // your friendly local compiler can re-order evaluation and thus read the
+    // protocol incorrectly. I have been bitten once, PAA.
+    int dir = conn.rpc->readInteger();
+    std::string cfg = conn.rpc->readString();
+    conn.dev->setFrontendMapping(dir, cfg);
+    conn.rpc->writeInteger(0);
     return 0;
 }
 
 int handleGetFrontendMapping(ConnectionInfo &conn) {
     // pass-thru
-    conn.rpc->writeString(
-        conn.dev->getFrontendMapping(
-            conn.rpc->readInteger()
-        )
-    );
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetFrontendMapping()");
+    // NB: this we get away with since there is only one method argument..
+    conn.rpc->writeString(conn.dev->getFrontendMapping(conn.rpc->readInteger()));
     return 0;
 }
 
 int handleGetNumChannels(ConnectionInfo &conn) {
     // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetNumChannels()");
     conn.rpc->writeInteger(conn.dev->getNumChannels(conn.rpc->readInteger()));
     return 0;
 }
 
 int handleGetChannelInfo(ConnectionInfo &conn) {
     // pass-thru
-    conn.rpc->writeKwargs(
-        conn.dev->getChannelInfo(
-            conn.rpc->readInteger(),
-            conn.rpc->readInteger()
-        )
-    );
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetChannelInfo()");
+    // NB: here we MUST read before calling the method, although the arguments
+    // are the same type their values would be re-ordered.
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeKwargs(conn.dev->getChannelInfo(dir, chn));
     return 0;
 }
 
 int handleGetFullDuplex(ConnectionInfo &conn) {
     // pass-thru
-    conn.rpc->writeInteger(
-        conn.dev->getFullDuplex(
-            conn.rpc->readInteger(),
-            conn.rpc->readInteger()
-        )
-    );
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetFullDuplex()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeInteger(conn.dev->getFullDuplex(dir, chn));
     return 0;
 }
 
 int handleGetStreamFormats(ConnectionInfo &conn) {
     // pass-thru (with some serialisation)
-    for (auto &fmt: conn.dev->getStreamFormats(
-        conn.rpc->readInteger(),
-        conn.rpc->readInteger())) {
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetStreamFormats()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    for (auto &fmt: conn.dev->getStreamFormats(dir,chn)) {
         conn.rpc->writeString(fmt);
     }
     // terminate list
@@ -249,19 +256,19 @@ int handleGetStreamFormats(ConnectionInfo &conn) {
 
 int handleGetNativeStreamFormat(ConnectionInfo &conn) {
     // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetNativeStreamFormat()");
     double fullScale = 0.0;
-    std::string fmt = conn.dev->getNativeStreamFormat(
-        conn.rpc->readInteger(),
-        conn.rpc->readInteger(),
-        fullScale
-    );
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    std::string fmt = conn.dev->getNativeStreamFormat(dir,chn,fullScale);
     conn.rpc->writeString(fmt);
-    conn.rpc->writeInteger((int)fullScale);
+    conn.rpc->writeDouble(fullScale);
     return 0;
 }
 
 int handleGetStreamArgsInfo(ConnectionInfo &conn) {
     // not implemented, skeleton only
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetStreamArgsInfo()");
     conn.rpc->readInteger();
     conn.rpc->readInteger();
     conn.rpc->writeString("");
@@ -270,6 +277,7 @@ int handleGetStreamArgsInfo(ConnectionInfo &conn) {
 
 int handleSetupStream(ConnectionInfo &conn) {
     // The actually complex(ish) bit..
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleSetupStream()");
     int dataId = conn.rpc->readInteger();
     int direction = conn.rpc->readInteger();
     std::string fmt = conn.rpc->readString();
@@ -287,6 +295,12 @@ int handleSetupStream(ConnectionInfo &conn) {
         conn.rpc->writeInteger(-2);
         return 0;
     }
+    // check we have a sample rate
+    if (conn.rate==0) {
+        SoapySDR_log(SOAPY_SDR_ERROR, "setupStream: sample rate not set for connection");
+        conn.rpc->writeInteger(-3);
+        return 0;
+    }
     // parse the channel list
     std::vector<size_t> channels;
     size_t cur;
@@ -298,15 +312,16 @@ int handleSetupStream(ConnectionInfo &conn) {
     } while (nxt!=std::string::npos);
     // fill out the connection details
     ConnectionInfo &data = s_connections.at(dataId);
+    data.dev = conn.dev;
     data.direction = direction;
     data.rate = conn.rate;
     data.fSize = g_frameSizes.at(fmt);
     data.numChans = channels.size();
-    // open the channel
+    // open the underlying stream
     data.stream = conn.dev->setupStream(direction, fmt, channels, args);
     if (!data.stream) {
         SoapySDR_log(SOAPY_SDR_ERROR, "setupStream: failed to create underlying stream");
-        conn.rpc->writeInteger(-3);
+        conn.rpc->writeInteger(-4);
     }
     // all good!
     conn.rpc->writeInteger(dataId);
@@ -314,6 +329,7 @@ int handleSetupStream(ConnectionInfo &conn) {
 }
 
 int handleCloseStream(ConnectionInfo &conn) {
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleCloseStream()");
     int dataId = conn.rpc->readInteger();
     if (s_connections.find(dataId)==s_connections.end()) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "closeStream: no such data stream ID: %d", dataId);
@@ -321,12 +337,14 @@ int handleCloseStream(ConnectionInfo &conn) {
     }
     ConnectionInfo &data = s_connections.at(dataId);
     data.dev->closeStream(data.stream);
+    SoapySDR_logf(SOAPY_SDR_INFO, "Closed data connection: %d", dataId);
     // no response
     return 0;
 }
 
 int handleGetStreamMTU(ConnectionInfo &conn) {
     // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetStreamMTU()");
     int dataId = conn.rpc->readInteger();
     if (s_connections.find(dataId)==s_connections.end()) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "getStreamMTU: no such data stream ID: %d", dataId);
@@ -337,6 +355,7 @@ int handleGetStreamMTU(ConnectionInfo &conn) {
 }
 
 int handleActivateStream(ConnectionInfo &conn) {
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleActivateStream()");
     int dataId = conn.rpc->readInteger();
     if (s_connections.find(dataId)==s_connections.end()) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "activateStream: no such data stream ID: %d", dataId);
@@ -345,6 +364,7 @@ int handleActivateStream(ConnectionInfo &conn) {
     }
     // start data pump thread
     ConnectionInfo &data = s_connections.at(dataId);
+    data.pid = -1;  // non-zero, to prevent thread terminating if it's scheduled before we can copy in real value!
     pthread_t pid;
     if (pthread_create(&pid, nullptr, dataPump, &data)) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "activateStream: failed to create data pump thread: %s", strerror(errno));
@@ -357,6 +377,7 @@ int handleActivateStream(ConnectionInfo &conn) {
 }
 
 int handleDeactivateStream(ConnectionInfo &conn) {
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleDeactivateStream()");
     int dataId = conn.rpc->readInteger();
     if (s_connections.find(dataId)==s_connections.end()) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "deactivateStream: no such data stream ID: %d", dataId);
@@ -378,136 +399,274 @@ int handleDeactivateStream(ConnectionInfo &conn) {
 
 int handleListAntennas(ConnectionInfo &conn) {
     // pass-thru
-    conn.rpc->writeStrVector(
-        conn.dev->listAntennas(
-            conn.rpc->readInteger(),
-            conn.rpc->readInteger()
-        )
-    );
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleListAntennas()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeStrVector(conn.dev->listAntennas(dir,chn));
     return 0;
 }
 
 int handleSetAntenna(ConnectionInfo &conn) {
     // pass-thru
-    conn.dev->setAntenna(conn.rpc->readInteger(), conn.rpc->readInteger(), conn.rpc->readString());
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleSetAntenna()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    std::string nam = conn.rpc->readString();
+    conn.dev->setAntenna(dir,chn,nam);
+    conn.rpc->writeInteger(0);
     return 0;
 }
 
 int handleGetAntenna(ConnectionInfo &conn) {
     // pass-thru
-    conn.rpc->writeString(
-        conn.dev->getAntenna(
-            conn.rpc->readInteger(),
-            conn.rpc->readInteger()
-        )
-    );
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetAntenna()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeString(conn.dev->getAntenna(dir,chn));
     return 0;
 }
 
 int handleListGains(ConnectionInfo &conn){
     // pass-thru
-    conn.rpc->writeStrVector(
-        conn.dev->listGains(
-            conn.rpc->readInteger(),
-            conn.rpc->readInteger()
-        )
-    );
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleListGains()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeStrVector(conn.dev->listGains(dir,chn));
     return 0;
 }
 
 int handleHasGainMode(ConnectionInfo &conn) {
     // pass-thru
-    conn.rpc->writeInteger(
-        conn.dev->hasGainMode(
-            conn.rpc->readInteger(),
-            conn.rpc->readInteger()
-        )
-    );
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleHasGainMode()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeInteger(conn.dev->hasGainMode(dir,chn));
     return 0;
 }
 
 int handleSetGainMode(ConnectionInfo &conn) {
     // pass-thru
-    conn.dev->setGainMode(conn.rpc->readInteger(), conn.rpc->readInteger(), conn.rpc->readInteger()>0);
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleSetGainMode()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    int set = conn.rpc->readInteger();
+    conn.dev->setGainMode(dir,chn,set>0);
+    conn.rpc->writeInteger(0);
     return 0;
 }
 
 int handleGetGainMode(ConnectionInfo &conn) {
     // pass-thru
-    conn.rpc->writeInteger(
-        conn.dev->getGainMode(
-            conn.rpc->readInteger(),
-            conn.rpc->readInteger()
-        )
-    );
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetGainMode()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeInteger(conn.dev->getGainMode(dir,chn));
     return 0;
 }
 
 int handleSetGain(ConnectionInfo &conn) {
     // pass-thru
-    conn.dev->setGain(conn.rpc->readInteger(), conn.rpc->readInteger(), (double)conn.rpc->readInteger());
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleSetGain()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    double gain = conn.rpc->readDouble();
+    conn.dev->setGain(dir,chn,gain);
+    conn.rpc->writeInteger(0);
     return 0;
 }
 
 int handleSetGainNamed(ConnectionInfo &conn) {
     // pass-thru
-    conn.dev->setGain(conn.rpc->readInteger(), conn.rpc->readInteger(),
-        conn.rpc->readString(), (double)conn.rpc->readInteger());
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleSetGainNamed()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    std::string nam = conn.rpc->readString();
+    double gain = conn.rpc->readDouble();
+    conn.dev->setGain(dir,chn,nam,gain);
+    conn.rpc->writeInteger(0);
     return 0;
 }
 
 int handleGetGain(ConnectionInfo &conn) {
     // pass-thru
-    conn.rpc->writeInteger(
-        (int)conn.dev->getGain(
-            conn.rpc->readInteger(),
-            conn.rpc->readInteger()
-        )
-    );
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetGain()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeDouble(conn.dev->getGain(dir,chn));
     return 0;
 }
 
 int handleGetGainNamed(ConnectionInfo &conn) {
     // pass-thru
-    conn.rpc->writeInteger(
-        (int)conn.dev->getGain(
-            conn.rpc->readInteger(),
-            conn.rpc->readInteger(),
-            conn.rpc->readString()
-        )
-    );
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetGainNamed()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    std::string nam = conn.rpc->readString();
+    conn.rpc->writeDouble(conn.dev->getGain(dir,chn,nam));
     return 0;
 }
 
 int handleGetGainRange(ConnectionInfo &conn) {
     // pass-thru
-    SoapySDR::Range r = conn.dev->getGainRange(
-        conn.rpc->readInteger(),
-        conn.rpc->readInteger()
-    );
-    conn.rpc->writeInteger((int)r.minimum());
-    conn.rpc->writeInteger((int)r.maximum());
-    conn.rpc->writeInteger((int)r.step());
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetGainRange()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    SoapySDR::Range r = conn.dev->getGainRange(dir,chn);
+    conn.rpc->writeDouble(r.minimum());
+    conn.rpc->writeDouble(r.maximum());
+    conn.rpc->writeDouble(r.step());
     return 0;
 }
 
 int handleGetGainRangeNamed(ConnectionInfo &conn) {
     // pass-thru
-    SoapySDR::Range r = conn.dev->getGainRange(
-        conn.rpc->readInteger(),
-        conn.rpc->readInteger(),
-        conn.rpc->readString()
-    );
-    conn.rpc->writeInteger((int)r.minimum());
-    conn.rpc->writeInteger((int)r.maximum());
-    conn.rpc->writeInteger((int)r.step());
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetGainRangeNamed()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    std::string nam = conn.rpc->readString();
+    SoapySDR::Range r = conn.dev->getGainRange(dir,chn,nam);
+    conn.rpc->writeDouble(r.minimum());
+    conn.rpc->writeDouble(r.maximum());
+    conn.rpc->writeDouble(r.step());
+    return 0;
+}
+
+int handleSetFrequency(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleSetFrequency()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    double frq = conn.rpc->readDouble();
+    SoapySDR::Kwargs kwargs = conn.rpc->readKwargs();
+    conn.dev->setFrequency(dir,chn,frq,kwargs);
+    conn.rpc->writeInteger(0);
+    return 0;
+}
+
+int handleSetFrequencyNamed(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleSetFrequencyNamed()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    std::string nam = conn.rpc->readString();
+    double frq = conn.rpc->readDouble();
+    SoapySDR::Kwargs kwargs = conn.rpc->readKwargs();
+    conn.dev->setFrequency(dir,chn,nam,frq,kwargs);
+    conn.rpc->writeInteger(0);
+    return 0;
+}
+
+int handleGetFrequency(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetFrequency()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeDouble(conn.dev->getFrequency(dir,chn));
+    return 0;    
+}
+
+int handleGetFrequencyNamed(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetFrequencyNamed()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    std::string nam = conn.rpc->readString();
+    conn.rpc->writeDouble(conn.dev->getFrequency(dir,chn,nam));
+    return 0;    
+}
+
+int handleListFrequencies(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleListFrequencies()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeStrVector(conn.dev->listFrequencies(dir,chn));
+    return 0;
+}
+
+int handleGetFrequencyRange(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetFrequencyRange()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    SoapySDR::RangeList list = conn.dev->getFrequencyRange(dir,chn);
+    for (auto r: list) {
+        conn.rpc->writeDouble(r.minimum());
+        conn.rpc->writeDouble(r.maximum());
+        conn.rpc->writeDouble(r.step());
+    }
+    conn.rpc->writeDouble(0);
+    conn.rpc->writeDouble(0);
+    conn.rpc->writeDouble(-1.0);
+    return 0;
+}
+int handleGetFrequencyRangeNamed(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetFrequencyRangeNamed()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    std::string nam = conn.rpc->readString();
+    SoapySDR::RangeList list = conn.dev->getFrequencyRange(dir,chn,nam);
+    for (auto r: list) {
+        conn.rpc->writeDouble(r.minimum());
+        conn.rpc->writeDouble(r.maximum());
+        conn.rpc->writeDouble(r.step());
+    }
+    conn.rpc->writeDouble(0);
+    conn.rpc->writeDouble(0);
+    conn.rpc->writeDouble(-1.0);
+    return 0;
+}
+int handleGetFrequencyArgsInfo(ConnectionInfo &conn) {
+    // not implemented, skeleton only
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetFrequencyArgsInfo()");
+    conn.rpc->readInteger();
+    conn.rpc->readInteger();
+    conn.rpc->writeString("");
+    return 0;
+}
+
+int handleSetSampleRate(ConnectionInfo &conn) {
+    // pass-thru, but remember for data stream setup
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleSetSampleRate()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    double rate = conn.rpc->readDouble();
+    conn.dev->setSampleRate(dir,chn,conn.rate=rate);
+    conn.rpc->writeInteger(0);
+    return 0;
+}
+
+int handleGetSampleRate(ConnectionInfo &conn) {
+    // pass-thru, but update rate if device altered it
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetSampleRate()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeDouble(conn.rate=conn.dev->getSampleRate(dir,chn));
+    return 0;    
+}
+
+int handleGetSampleRateRange(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetSampleRateRange()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    SoapySDR::RangeList list = conn.dev->getSampleRateRange(dir,chn);
+    for (auto r: list) {
+        conn.rpc->writeDouble(r.minimum());
+        conn.rpc->writeDouble(r.maximum());
+        conn.rpc->writeDouble(r.step());
+    }
+    conn.rpc->writeDouble(0);
+    conn.rpc->writeDouble(0);
+    conn.rpc->writeDouble(-1.0);
     return 0;
 }
 
 int handleRPC(struct pollfd *pfd) {
     // oops before expected..
     if (pfd->revents & (POLLERR|POLLHUP)) {
-        SoapySDR_log(SOAPY_SDR_ERROR,"EOF or error in RPC socket");
+        SoapySDR_log(SOAPY_SDR_ERROR,"ERR or HUP on RPC socket");
         return -1;
     }
     // get connection..
@@ -515,16 +674,23 @@ int handleRPC(struct pollfd *pfd) {
     // dispatch requested RPC..
     int call = conn.rpc->readInteger();
     if (call<0) {
-        SoapySDR_log(SOAPY_SDR_ERROR, "EOf or error in RPC socket");
+        SoapySDR_log(SOAPY_SDR_ERROR, "EOF or error on RPC socket");
         return -1;
     }
-    SoapySDR_logf(SOAPY_SDR_TRACE, "handleRPC: call=%d", call);
+    SoapySDR_logf(SOAPY_SDR_DEBUG, "handleRPC: call=%d", call);
     switch (call) {
     // unknown
     default:
         SoapySDR_logf(SOAPY_SDR_ERROR,"Unknown RPC call: %d", call);
         conn.rpc->writeInteger(-1000);
         return -1;
+    // special - dropping connection
+    case TCPREMOTE_DROP_RPC:
+        SoapySDR_logf(SOAPY_SDR_INFO,"Dropping connection: %d", pfd->fd);
+        delete conn.rpc;
+        SoapySDR::Device::unmake(conn.dev);
+        s_connections.erase(pfd->fd);
+        return 0;
     // identification API
     case TCPREMOTE_GET_HARDWARE_KEY:
         return handleGetHardwareKey(conn);
@@ -586,22 +752,30 @@ int handleRPC(struct pollfd *pfd) {
         return handleGetGainRange(conn);
     case TCPREMOTE_GET_GAIN_RANGE_NAMED:
         return handleGetGainRangeNamed(conn);
-/*  TODO!! All these!!
     // frequency API
-    TCPREMOTE_SET_FREQUENCY,
-    TCPREMOTE_SET_FREQUENCY_NAMED,
-    TCPREMOTE_GET_FREQUENCY,
-    TCPREMOTE_GET_FREQUENCY_NAMED,
-    TCPREMOTE_LIST_FREQUENCIES,
-    TCPREMOTE_GET_FREQUENCY_RANGE,
-    TCPREMOTE_GET_FREQUENCY_RANGE_NAMED,
-    TCPREMOTE_GET_FREQUENCY_ARGS_INFO,
+    case TCPREMOTE_SET_FREQUENCY:
+        return handleSetFrequency(conn);
+    case TCPREMOTE_SET_FREQUENCY_NAMED:
+        return handleSetFrequencyNamed(conn);
+    case TCPREMOTE_GET_FREQUENCY:
+        return handleGetFrequency(conn);
+    case TCPREMOTE_GET_FREQUENCY_NAMED:
+        return handleGetFrequencyNamed(conn);
+    case TCPREMOTE_LIST_FREQUENCIES:
+        return handleListFrequencies(conn);
+    case TCPREMOTE_GET_FREQUENCY_RANGE:
+        return handleGetFrequencyRange(conn);
+    case TCPREMOTE_GET_FREQUENCY_RANGE_NAMED:
+        return handleGetFrequencyRangeNamed(conn);
+    case TCPREMOTE_GET_FREQUENCY_ARGS_INFO:
+        return handleGetFrequencyArgsInfo(conn);
     // sample rate API
-    TCPREMOTE_SET_SAMPLE_RATE,
-    TCPREMOTE_GET_SAMPLE_RATE,
-    // list rates deprecated, we emulate in client side
-    TCPREMOTE_GET_SAMPLE_RATE_RANGE, */
-
+    case TCPREMOTE_SET_SAMPLE_RATE:
+        return handleSetSampleRate(conn);
+    case TCPREMOTE_GET_SAMPLE_RATE:
+        return handleGetSampleRate(conn);
+    case TCPREMOTE_GET_SAMPLE_RATE_RANGE:
+        return handleGetSampleRateRange(conn);
     /* NOT IMPLEMENTED ON CLIENT YET!
     // frontend corrections API
     TCPREMOTE_HAS_DC_OFFSET_MODE,

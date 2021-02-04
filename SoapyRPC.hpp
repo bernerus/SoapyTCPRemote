@@ -143,22 +143,25 @@ enum
     // UART API
     TCPREMOTE_LIST_UARTS,
     TCPREMOTE_WRITE_UART,
-    TCPREMOTE_READ_UART
+    TCPREMOTE_READ_UART,
+    // internal special - dropping connection
+    TCPREMOTE_DROP_RPC = 1000
 };
 
 // Design notes:
 // - holds error state, to ensure no further I/O is attempted once errored,
 //   this allows strerror()/perror() to work despite subsequent rpc methods
-//   and allows error to be detected at the end of a series of rpc methods
+//   and allows error to be detected at the end of a series of rpc methods.
 class SoapyRPC
 {
 public:
     SoapyRPC(int socket) {
         hasError = false;
         handle = fdopen(socket, "r+");
-        if (handle)
+        if (handle) {
             setlinebuf(handle);
-        else {
+            SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyRPC::<cons>(%d)", socket);
+        } else {
             SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyRPC::<cons>, failed to fdopen socket: %s", strerror(errno));
             hasError = true;
         }
@@ -167,13 +170,16 @@ public:
         hasError = false;
         handle = fp;
         setlinebuf(handle);
+        SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyRPC::<cons>(%p=>%d)", fp, fileno(fp));
     }
     ~SoapyRPC() {
+        SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyRPC::<dest>(%d)", handle? fileno(handle): -1);
         if (handle)
             fclose(handle);
     }
     int writeInteger(const int i) {
         if (hasError) return -1;
+        SoapySDR_logf(SOAPY_SDR_TRACE, "Wi %d", i);
         int r = fprintf(handle, "%d\n", i);
         if (r<0) {
             SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyRPC::writeInteger: %s", strerror(errno));
@@ -181,8 +187,19 @@ public:
         }
         return r;
     }
+    int writeDouble(const double d) {
+        if (hasError) return -1;
+        SoapySDR_logf(SOAPY_SDR_TRACE, "Wd %f", d);
+        int r = fprintf(handle, "%f\n", d);
+        if (r<0) {
+            SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyRPC::writeDouble %s", strerror(errno));
+            hasError = true;
+        }
+        return r;
+    }
     int writeString(const std::string s) {
         if (hasError) return -1;
+        SoapySDR_logf(SOAPY_SDR_TRACE, "Ws %s", s.c_str());
         int r = fprintf(handle, "%s\n", s.c_str());
         if (r<0) {
             SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyRPC::writeString: %s", strerror(errno));
@@ -234,6 +251,16 @@ public:
             SoapySDR_log(SOAPY_SDR_ERROR, "SoapyRPC::readInteger, empty line");
         return rv;
     }
+    double readDouble() {
+        if (hasError) return -1;
+        double rv=NAN;
+        std::string s = readString();
+        if (s.length()>0)
+            sscanf(s.c_str(), "%lf", &rv);
+        else
+            SoapySDR_log(SOAPY_SDR_ERROR, "SoapyRPC::readDouble, empty line");
+        return rv;
+    }
     std::string readString() {
         char line[256];
         std::string rv;
@@ -245,6 +272,7 @@ public:
             SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyRPC::readString: %s", strerror(errno));
             hasError = true;
         }
+        SoapySDR_logf(SOAPY_SDR_TRACE, "R '%s'", rv.c_str());
         return rv;
     }
     SoapySDR::Kwargs readKwargs() {
