@@ -107,6 +107,10 @@ void *dataPump(void *ctx) {
         void **buffs = (void **)alloca(conn->numChans);
         uint8_t *cbuf = (uint8_t *)alloca(bufSize);
         uint8_t *nbuf = (uint8_t *)alloca(bufSize);
+        // ensure underlying socket buffer can take sample block size, to avoid
+        // blocking in fwrite call and ensuing ALSA overruns.
+        if (setsockopt(fileno(conn->netFp), SOL_SOCKET, SO_SNDBUF, &bufSize, sizeof(bufSize)))
+            SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: unable to adjust send buffer, may overrun");
         for (size_t c=0; c<conn->numChans; ++c)
             buffs[c] = cbuf+(c*blkSize);
         // read until told to stop!
