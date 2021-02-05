@@ -117,6 +117,9 @@ void *dataPump(void *ctx) {
             int nread = conn->dev->readStream(conn->stream, buffs, numElems, flags, time, timeout);
             if (nread<0) {
                 SoapySDR_logf(SOAPY_SDR_ERROR, "dataPump: error reading underlying stream: %d", nread);
+                // non-fatal under/over-flow
+                if (nread==SOAPY_SDR_UNDERFLOW || nread==SOAPY_SDR_OVERFLOW)
+                    continue;
                 break;
             }
             // interleave samples across channels for network format
