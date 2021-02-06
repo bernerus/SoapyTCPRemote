@@ -38,6 +38,7 @@ SoapyTCPRemote::SoapyTCPRemote(const std::string &address, const std::string &po
     int status = loadRemoteDriver();
     if (status<0)
         throw std::runtime_error("unable to load remote driver");
+    rate = 0;
 }
 
 SoapyTCPRemote::~SoapyTCPRemote()
@@ -192,9 +193,13 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
 {
     SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::setupStream(%d,%s,%d,...)",
         direction, format.c_str(), channels.size());
-    // first check we have a frame size for the format
+    // first check we have a frame size for the format, and a sample rate
     if (g_frameSizes.find(format)==g_frameSizes.end()) {
         SoapySDR_log(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, unknown sample format");
+        return nullptr;
+    }
+    if (this->rate==0) {
+        SoapySDR_log(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, sample Rate not set");
         return nullptr;
     }
     // in order to help the remote side associate the data stream with the setup call,
@@ -228,6 +233,11 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
     rv->fSize = g_frameSizes.at(format);
     rv->numChans = channels.size();
     rv->running = false;
+    // ensure large receive buffer to avoid blocking transmitter..
+    size_t sockBuf = rv->fSize*rv->numChans*(int)this->rate*2;
+    if (setsockopt(data, SOL_SOCKET, SO_RCVBUF, &sockBuf, sizeof(sockBuf))) {
+        SoapySDR_log(SOAPY_SDR_WARNING, "SoapyTCPRemote::setupStream, unable to set receive buffer size, may impact performance");
+    }
     // make the RPC call with the remoteId
     rpc->writeInteger(TCPREMOTE_SETUP_STREAM);
     rpc->writeInteger(rv->remoteId);
@@ -611,7 +621,7 @@ void SoapyTCPRemote::setSampleRate(const int direction, const size_t channel, co
     rpc->writeInteger(TCPREMOTE_SET_SAMPLE_RATE);
     rpc->writeInteger(direction);
     rpc->writeInteger(channel);
-    rpc->writeDouble(rate);
+    rpc->writeDouble(this->rate=rate);
     rpc->readInteger(); // wait for completion!
 }
 

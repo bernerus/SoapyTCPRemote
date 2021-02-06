@@ -20,6 +20,8 @@ private:
     const std::string remotePort;
     const std::string remoteDriver;
     const std::string remoteArgs;
+    // local copy of sample rate (used to calculate buffer sizes)
+    double rate;
     // network connect
     int connect() const;
     // RPC handler
