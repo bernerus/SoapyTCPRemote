@@ -16,7 +16,7 @@
 class SoapySDR::Stream
 {
 public:
-    FILE* dataFp;
+    int netSock;
     int remoteId;
     int numChans;
     size_t fSize;
@@ -229,7 +229,7 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
     SoapySDR::Stream *rv = new SoapySDR::Stream();
     dir[dlen]=0;
     sscanf(dir, "%d", &rv->remoteId);
-    rv->dataFp = fdopen(data, SOAPY_SDR_RX==direction? "r": "w");
+    rv->netSock = data;
     rv->fSize = g_frameSizes.at(format);
     rv->numChans = channels.size();
     rv->running = false;
@@ -270,7 +270,7 @@ void SoapyTCPRemote::closeStream(SoapySDR::Stream *stream)
     if (stream->running)
         deactivateStream(stream);
     rpc->writeInteger(TCPREMOTE_CLOSE_STREAM);
-    fclose(stream->dataFp);
+    close(stream->netSock);
     delete stream;
 }
 
@@ -324,10 +324,9 @@ int SoapyTCPRemote::readStream(SoapySDR::Stream *stream,
         return SOAPY_SDR_TIMEOUT;
     // Transfer format on the wire is interleaved sample frames (each fSize) across channels.
     // We read by making one syscall for the maximum amount, then de-interleaving to buffs.
-    // NB: use of fread & stdio to ensure block sizes are reliable despite TCP/IP underneath!
     size_t blkSize = stream->fSize * stream->numChans;
     uint8_t *swamp = (uint8_t *)alloca(blkSize * numElems);
-    int status = fread(swamp, blkSize, numElems, stream->dataFp);
+    int status = read(stream->netSock, swamp, blkSize*numElems);
     if (status<=0) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::readStream, error reading data: %s", strerror(errno));
         return SOAPY_SDR_STREAM_ERROR;
@@ -372,7 +371,7 @@ int SoapyTCPRemote::writeStream(SoapySDR::Stream *stream,
             noff += stream->fSize;
         }
         boff += stream->fSize;
-        if (fwrite(nbuf, bufSize, 1, stream->dataFp)!=1) {
+        if (write(stream->netSock, nbuf, bufSize)!=(int)bufSize) {
             SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::writeStream, error writing data: %s", strerror(errno));
             break;
         }

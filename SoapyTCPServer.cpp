@@ -105,16 +105,17 @@ void *dataPump(void *ctx) {
         uint8_t *cbuf = (uint8_t *)alloca(bufSize);
         uint8_t *nbuf = (uint8_t *)malloc(netSize);
         int nin = 0, nout = 0;
-        // set larger socket buffer (2 secs of data), tries to avoid overruns if TCP backs off
-        size_t sockBuf = bufSize*8;
+        // set larger socket buffer (1 sec of data), tries to avoid overruns if TCP stalls
+        size_t sockBuf = bufSize*4;
         if (setsockopt(conn->netSock, SOL_SOCKET, SO_SNDBUF, &sockBuf, sizeof(sockBuf)))
             SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: unable to adjust send buffer, may overrun");
         socklen_t sbl = sizeof(sockBuf);
         if (getsockopt(conn->netSock, SOL_SOCKET, SO_SNDBUF, &sockBuf, &sbl))
             SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: unable to read send buffer length, WILL overrun!");
+        SoapySDR_logf(SOAPY_SDR_DEBUG, "dataPump: bufSize=%d netSize=%d sockBuf=%d", bufSize, netSize, sockBuf);
         for (size_t c=0; c<conn->numChans; ++c)
             buffs[c] = cbuf+(c*blkSize);
-        // read until told to stop!
+        // pump until told to stop!
         while (conn->pid!=0) {
             int flags = 0;
             long long time = 0;
@@ -128,30 +129,29 @@ void *dataPump(void *ctx) {
                 break;
             }
             // interleave samples across channels for network format
-            bool novr = false;
-            for (int idx=0; !novr && idx<nread; ++idx) {
+            size_t elemSize = conn->fSize * conn->numChans;
+            for (int idx=0; idx<nread; ++idx) {
                 size_t eoff = idx*conn->fSize;
-                for (size_t c=0; !novr && c<conn->numChans; ++c) {
+                for (size_t c=0; c<conn->numChans; ++c) {
                     uint8_t *pc = (uint8_t *)buffs[c];
                     memcpy(nbuf+nin, pc+eoff, conn->fSize);
-                    // move along the buffer.. wrap & check for overruns
                     nin += conn->fSize;
-                    if (nin>=(int)netSize)
-                        nin = 0;
-                    int nuse = nin-nout;
-                    if (nuse<0)
-                        nuse += netSize;
-                    if (nuse+conn->fSize >= netSize) {
-                        SoapySDR_logf(SOAPY_SDR_WARNING, "dataPump: network buffer overrun, dropping data: %d/%d", nuse, netSize);
-                        novr = true;
-                    }
+                }
+                // wrap & check for overruns
+                if (nin>=(int)netSize)
+                    nin = 0;
+                int nuse = nin-nout;
+                if (nuse<0)
+                    nuse += netSize;
+                if (nuse+elemSize>=netSize) {
+                    SoapySDR_logf(SOAPY_SDR_WARNING, "dataPump: network buffer overrun, dropping data: used=%d size=%d", nuse, netSize);
+                    break;
                 }
             }
             // write as much as we can to network without blocking
             int nrem = 0;
             if (ioctl(conn->netSock, TIOCOUTQ, &nrem)<0) {
-                SoapySDR_logf(SOAPY_SDR_WARNING, "dataPump: unable to read send buffer space: %s", strerror(errno));
-                nrem = conn->fSize; // try one frame
+                SoapySDR_logf(SOAPY_SDR_WARNING, "dataPump: unable to read send buffer used: %s", strerror(errno));
             }
             nrem = sockBuf-nrem;
             int nuse = nin-nout;
