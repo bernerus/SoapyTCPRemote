@@ -15,13 +15,23 @@
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <netdb.h>
+#include <unordered_set>
+
+struct pipebuf_t {
+    void *buf;
+    int len, in, out;
+    pthread_mutex_t mutex;
+    pthread_cond_t rd, wr;
+};
 
 struct ConnectionInfo
 {
     // NB: existance of an rpc object implies this is an RPC connection, otherwise data stream
     SoapyRPC *rpc;
     SoapySDR::Device *dev;
+    std::unordered_set<int> dataIds;
     int netSock;
+    pipebuf_t *netPipe;
     int direction;
     double rate;
     size_t fSize;
@@ -29,6 +39,107 @@ struct ConnectionInfo
     SoapySDR::Stream *stream;
     volatile pthread_t pid;
 };
+
+pipebuf_t *newpipe(int size) {
+    pipebuf_t *pipe = (pipebuf_t *)malloc(sizeof(pipebuf_t)+size);
+    pipe->buf = pipe+1;
+    pipe->len = size;
+    pipe->in = pipe->out = 0;
+    pthread_mutex_init(&pipe->mutex, NULL);
+    pthread_cond_init(&pipe->rd, NULL);
+    pthread_cond_init(&pipe->wr, NULL);
+    return pipe;
+}
+
+// blocking/failing write, allows thread switching
+int pipewrite(void *src, int sz, int num, pipebuf_t *pipe, bool block = true) {
+    int rv = -1;
+    // args check
+    if (!src || !sz || !num || !pipe)
+        return -1;
+    // gain exclusive access to the pipe..
+    pthread_mutex_lock(&pipe->mutex);
+    // wait for space..
+    int av=0;
+    do {
+        // calculate pipe space used & available..
+        int us = pipe->in-pipe->out;
+        if (us<0) us += pipe->len;
+        av = pipe->len-us-1;
+        if (av<sz) {
+            // block or fail?
+            if (block)
+                pthread_cond_wait(&pipe->rd, &pipe->mutex);
+            else {
+                pthread_mutex_unlock(&pipe->mutex);
+                return rv;
+            }
+        }
+    } while (av<sz);
+    // calculate how many items of sz will fit (up to num)
+    int ft = av/sz;
+    if (ft>num) ft=num;
+    // in bytes..
+    int by = ft*sz;
+    // move those bytes!
+    char *p = (char *)src;
+    while (by--) {
+        ((char *)pipe->buf)[pipe->in++]=*p++;
+        if (pipe->in>=pipe->len)
+            pipe->in=0;
+    }
+    // assign return value = number of items written
+    rv = ft;
+    // release access under all exit conditions
+    pthread_mutex_unlock(&pipe->mutex);
+    // signal a write has occurred
+    pthread_cond_signal(&pipe->wr);
+    return rv;
+}
+
+// blocking/failing read, allows thread switching
+int piperead(void *dst, int sz, int num, pipebuf_t *pipe, bool block = true) {
+    int rv = -1;
+    // args check
+    if (!dst || !sz || !num || !pipe)
+        return -1;
+    // gain exclusive access to the pipe..
+    pthread_mutex_lock(&pipe->mutex);
+    // wait for data..
+    int us=0;
+    do {
+        // calculate pipe space used
+        us = pipe->in-pipe->out;
+        if (us<0) us += pipe->len;
+        if (us<sz) {
+            if (block)
+                pthread_cond_wait(&pipe->wr, &pipe->mutex);
+            else {
+                pthread_mutex_unlock(&pipe->mutex);
+                return 0;
+            }
+        }
+    } while (us<sz);
+    // calculate how many items of sz are in the pipe (up to num)
+    int nm = us/sz;
+    if (nm>num) nm=num;
+    // in bytes..
+    int by = nm*sz;
+    // move those bytes!
+    char *p = (char *)dst;
+    while (by--) {
+        *p++ = ((char *)pipe->buf)[pipe->out++];
+        if (pipe->out>=pipe->len)
+            pipe->out=0;
+    }
+    // assign return value = number of items read
+    rv = nm;
+    // release access under all exit conditions
+    pthread_mutex_unlock(&pipe->mutex);
+    // signal that a read has occurred
+    pthread_cond_signal(&pipe->rd);
+    return rv;
+}
 
 static std::map<int, ConnectionInfo> s_connections;
 
@@ -86,6 +197,44 @@ int createData(int sock, int type) {
     return 0;
 }
 
+// uSec difference between timespec samples
+long tsdiff(struct timespec *t1, struct timespec *t2) {
+    long r = (t2->tv_sec-t1->tv_sec)*1000000;
+    r += (t2->tv_nsec-t1->tv_nsec)/1000;
+    return r;
+}
+void *netPump(void *ctx) {
+    ConnectionInfo *conn = (ConnectionInfo *)ctx;
+    // you had 1 job... read that pipe and stuff down network
+    size_t elemSize = conn->fSize*conn->numChans;
+    size_t numElems = BUFSIZ/elemSize;
+    void *wrbuf = alloca(numElems*elemSize);
+    int nrd;
+/*        // set TCP send buffer to twice expected write size, tries to avoid overruns if TCP stalls
+        size_t sockBuf = bufSize*2;
+        if (setsockopt(conn->netSock, SOL_SOCKET, SO_SNDBUF, &sockBuf, sizeof(sockBuf)))
+            SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: unable to adjust send buffer, may overrun");
+        socklen_t sbl = sizeof(sockBuf);
+        if (getsockopt(conn->netSock, SOL_SOCKET, SO_SNDBUF, &sockBuf, &sbl))
+            SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: unable to read send buffer length, WILL overrun!");*/
+    SoapySDR_logf(SOAPY_SDR_TRACE, "netPump: start: %d", conn->netSock);
+    struct timespec lt;
+    clock_gettime(CLOCK_MONOTONIC, &lt);
+    while ((nrd=piperead(wrbuf, elemSize, numElems, conn->netPipe))>0 && conn->pid!=0) {
+        if (nullptr==getenv("INHIBIT_WRITE") && write(conn->netSock, wrbuf, elemSize*nrd)!=(int)elemSize*nrd) {
+            SoapySDR_logf(SOAPY_SDR_ERROR, "netPump: unable to write to network: %s", strerror(errno));
+            break;
+        }
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        SoapySDR_logf(SOAPY_SDR_TRACE, "%ld: netPump: write: %d<=%d",
+            tsdiff(&lt, &ts), conn->netSock, nrd*elemSize);
+        lt = ts;
+    }
+    SoapySDR_logf(SOAPY_SDR_TRACE, "netPump: stop: %d", conn->netSock);
+    return nullptr;
+}
+
 void *dataPump(void *ctx) {
     ConnectionInfo *conn = (ConnectionInfo *)ctx;
     // first - activate the underlying stream
@@ -95,84 +244,63 @@ void *dataPump(void *ctx) {
     }
     // which direction?
     if (SOAPY_SDR_RX==conn->direction) {
-        // calculate appropriate element count and block sizes for ~4Hz read rate
-        size_t numElems = (int)(conn->rate / 4.0);
-        size_t blkSize = numElems * conn->fSize;
-        size_t bufSize = blkSize * conn->numChans;
-        size_t netSize = bufSize * 4 * 10;
-        // allocate buffers for channel data and 10 seconds of network data
+        // use maximum number of elements/samples per read supported by the underlying driver
+        size_t numElems = conn->dev->getStreamMTU(conn->stream);
+        size_t elemSize = conn->fSize * conn->numChans;
+        size_t chnSize = numElems * conn->fSize;
+        size_t readSize = chnSize * conn->numChans;
+        size_t pipeSize = readSize * 10;
+        // allocate buffers for channel data (0.1s) and pipe for ~1 second of network data
         void **buffs = (void **)alloca(conn->numChans);
-        uint8_t *cbuf = (uint8_t *)alloca(bufSize);
-        uint8_t *nbuf = (uint8_t *)malloc(netSize);
-        int nin = 0, nout = 0;
-        // set larger socket buffer (1 sec of data), tries to avoid overruns if TCP stalls
-        size_t sockBuf = bufSize*4;
-        if (setsockopt(conn->netSock, SOL_SOCKET, SO_SNDBUF, &sockBuf, sizeof(sockBuf)))
-            SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: unable to adjust send buffer, may overrun");
-        socklen_t sbl = sizeof(sockBuf);
-        if (getsockopt(conn->netSock, SOL_SOCKET, SO_SNDBUF, &sockBuf, &sbl))
-            SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: unable to read send buffer length, WILL overrun!");
-        SoapySDR_logf(SOAPY_SDR_DEBUG, "dataPump: bufSize=%d netSize=%d sockBuf=%d", bufSize, netSize, sockBuf);
+        uint8_t *cbuf = (uint8_t *)alloca(readSize);
+        uint8_t *pbuf = (uint8_t *)alloca(readSize);
+        conn->netPipe = newpipe(pipeSize);
+        SoapySDR_logf(SOAPY_SDR_TRACE, "dataPump: numElems=%d", numElems);
+        // start network pump
+        pthread_t fpid;
+        pthread_create(&fpid, nullptr, netPump, conn);
         for (size_t c=0; c<conn->numChans; ++c)
-            buffs[c] = cbuf+(c*blkSize);
+            buffs[c] = cbuf+(c*chnSize);
         // pump until told to stop!
+        struct timespec lt;
+        clock_gettime(CLOCK_MONOTONIC, &lt);
         while (conn->pid!=0) {
             int flags = 0;
             long long time = 0;
             long timeout = 1000000; // 1 second
             int nread = conn->dev->readStream(conn->stream, buffs, numElems, flags, time, timeout);
             if (nread<0) {
-                SoapySDR_logf(SOAPY_SDR_ERROR, "dataPump: error reading underlying stream: %d", nread);
+                SoapySDR_logf(SOAPY_SDR_ERROR,
+                    "dataPump: error reading underlying stream: %s", SoapySDR_errToStr(nread));
                 // non-fatal overflow
                 if (nread==SOAPY_SDR_OVERFLOW)
                     continue;
                 break;
             }
             // interleave samples across channels for network format
-            size_t elemSize = conn->fSize * conn->numChans;
+            uint8_t *pn = pbuf;
             for (int idx=0; idx<nread; ++idx) {
                 size_t eoff = idx*conn->fSize;
                 for (size_t c=0; c<conn->numChans; ++c) {
                     uint8_t *pc = (uint8_t *)buffs[c];
-                    memcpy(nbuf+nin, pc+eoff, conn->fSize);
-                    nin += conn->fSize;
-                }
-                // wrap & check for overruns
-                if (nin>=(int)netSize)
-                    nin = 0;
-                int nuse = nin-nout;
-                if (nuse<0)
-                    nuse += netSize;
-                if (nuse+elemSize>=netSize) {
-                    SoapySDR_logf(SOAPY_SDR_WARNING, "dataPump: network buffer overrun, dropping data: used=%d size=%d", nuse, netSize);
-                    break;
+                    memcpy(pn, pc+eoff, conn->fSize);
+                    pn += conn->fSize;
                 }
             }
-            // write as much as we can to network without blocking
-            int nrem = 0;
-            if (ioctl(conn->netSock, TIOCOUTQ, &nrem)<0) {
-                SoapySDR_logf(SOAPY_SDR_WARNING, "dataPump: unable to read send buffer used: %s", strerror(errno));
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            SoapySDR_logf(SOAPY_SDR_TRACE, "%ld: dataPump: p<=%d",
+                tsdiff(&lt, &ts), elemSize*nread);
+            lt = ts;
+            // push to pipe in multiples of element size
+            if (nullptr==getenv("INHIBIT_PIPE") && pipewrite(pbuf, elemSize, nread, conn->netPipe, false)<0) {
+                SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: overrun network pipe, data loss");
             }
-            nrem = sockBuf-nrem;
-            int nuse = nin-nout;
-            if (nuse<0)
-                nuse += netSize;
-            if (nuse<nrem)
-                nrem = nuse;
-            // adjust for buffer wrap
-            if (nout+nrem>(int)netSize) {
-                nrem = netSize-nout;
-            }
-            if (write(conn->netSock, nbuf+nout, nrem)!=nrem) {
-                SoapySDR_logf(SOAPY_SDR_ERROR, "dataPump: error writing to network: %s", strerror(errno));
-                break;
-            } else {
-                SoapySDR_logf(SOAPY_SDR_TRACE, "dataPump: wrote: %d", nrem);
-            }
-            nout += nrem;
-            if (nout>=(int)netSize)
-                nout -= netSize;
         }
+        // final write to ensure netPump wakes up and terminates
+        pipewrite(pbuf, elemSize, 1, conn->netPipe);
+        pthread_join(fpid, nullptr);
+        free(conn->netPipe);
     } else {
         // TODO:XXX:
         SoapySDR_log(SOAPY_SDR_ERROR, "dataPump: unimplemented data receive funtion :=(");
@@ -362,22 +490,30 @@ int handleSetupStream(ConnectionInfo &conn) {
         conn.rpc->writeInteger(-4);
     }
     // all good!
+    conn.dataIds.insert(dataId);
     conn.rpc->writeInteger(dataId);
     return 0;
 }
 
-int handleCloseStream(ConnectionInfo &conn) {
-    SoapySDR_log(SOAPY_SDR_DEBUG, "handleCloseStream()");
-    int dataId = conn.rpc->readInteger();
+int internalCloseStream(ConnectionInfo &conn, int dataId) {
     if (s_connections.find(dataId)==s_connections.end()) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "closeStream: no such data stream ID: %d", dataId);
         return 0;
     }
     ConnectionInfo &data = s_connections.at(dataId);
     data.dev->closeStream(data.stream);
+    s_connections.erase(dataId);
+    close(dataId);
+    conn.dataIds.erase(dataId);
     SoapySDR_logf(SOAPY_SDR_INFO, "Closed data connection: %d", dataId);
     // no response
     return 0;
+}
+
+int handleCloseStream(ConnectionInfo &conn) {
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleCloseStream()");
+    int dataId = conn.rpc->readInteger();
+    return internalCloseStream(conn, dataId);
 }
 
 int handleGetStreamMTU(ConnectionInfo &conn) {
@@ -403,12 +539,20 @@ int handleActivateStream(ConnectionInfo &conn) {
     // start data pump thread
     ConnectionInfo &data = s_connections.at(dataId);
     data.pid = -1;  // non-zero, to prevent thread terminating if it's scheduled before we can copy in real value!
+    // create ourselves a real-time thread to read the data..
+    pthread_attr_t pat;
+    pthread_attr_init(&pat);
+    pthread_attr_setschedpolicy(&pat, SCHED_FIFO);
+    struct sched_param sch;
+    sch.sched_priority = 1;
+    pthread_attr_setschedparam(&pat, &sch);
     pthread_t pid;
-    if (pthread_create(&pid, nullptr, dataPump, &data)) {
+    if (pthread_create(&pid, &pat, dataPump, &data)) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "activateStream: failed to create data pump thread: %s", strerror(errno));
         conn.rpc->writeInteger(-2);
         return 0;
     }
+    pthread_attr_destroy(&pat);
     data.pid = pid;
     conn.rpc->writeInteger(0);
     return 0;
@@ -726,6 +870,10 @@ int handleRPC(struct pollfd *pfd) {
     case TCPREMOTE_DROP_RPC:
         SoapySDR_logf(SOAPY_SDR_INFO,"Dropping connection: %d", pfd->fd);
         delete conn.rpc;
+        while (!conn.dataIds.empty()) {
+            int dataId = *(conn.dataIds.begin());
+            internalCloseStream(conn, dataId);
+        }
         SoapySDR::Device::unmake(conn.dev);
         s_connections.erase(pfd->fd);
         return 0;

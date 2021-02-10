@@ -193,14 +193,29 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
 {
     SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::setupStream(%d,%s,%d,...)",
         direction, format.c_str(), channels.size());
-    // first check we have a frame size for the format, and a sample rate
+    // grab the native format
+    double fs;
+    std::string fmtnat = getNativeStreamFormat(direction, channels[0], fs);
+    // first check we have a frame size for both formats, and a sample rate
     if (g_frameSizes.find(format)==g_frameSizes.end()) {
-        SoapySDR_log(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, unknown sample format");
+        SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, unknown requested format (%s)", format.c_str());
+        return nullptr;
+    }
+    if (g_frameSizes.find(fmtnat)==g_frameSizes.end()) {
+        SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, unknown native format (%s)", fmtnat.c_str());
         return nullptr;
     }
     if (this->rate==0) {
         SoapySDR_log(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, sample Rate not set");
         return nullptr;
+    }
+    // choose smallest wire format..
+    if (g_frameSizes.at(fmtnat)<g_frameSizes.at(format)) {
+        fmtwire = fmtnat;
+        fmtout = format;
+    } else {
+        fmtwire = format;
+        fmtout = format;
     }
     // in order to help the remote side associate the data stream with the setup call,
     // we create the data connection *first*, then send it's remoteId as the first
@@ -230,19 +245,19 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
     dir[dlen]=0;
     sscanf(dir, "%d", &rv->remoteId);
     rv->netSock = data;
-    rv->fSize = g_frameSizes.at(format);
+    rv->fSize = g_frameSizes.at(fmtwire);
     rv->numChans = channels.size();
     rv->running = false;
-    // ensure large receive buffer to avoid blocking transmitter..
+    /* ensure large receive buffer to avoid blocking transmitter..
     size_t sockBuf = rv->fSize*rv->numChans*(int)this->rate*2;
     if (setsockopt(data, SOL_SOCKET, SO_RCVBUF, &sockBuf, sizeof(sockBuf))) {
         SoapySDR_log(SOAPY_SDR_WARNING, "SoapyTCPRemote::setupStream, unable to set receive buffer size, may impact performance");
-    }
+    }*/
     // make the RPC call with the remoteId
     rpc->writeInteger(TCPREMOTE_SETUP_STREAM);
     rpc->writeInteger(rv->remoteId);
     rpc->writeInteger(direction);
-    rpc->writeString(format);
+    rpc->writeString(fmtwire);
     // channel list, sent as a space separated list of numbers on one line
     std::string chans;
     for (auto it=channels.begin(); it!=channels.end(); ++it) {
@@ -311,6 +326,18 @@ int SoapyTCPRemote::deactivateStream(SoapySDR::Stream *stream, const int flags, 
     return status;
 }
 
+static void *convertCS16toCF32(void *dst, const void *src, size_t cnt /* ignored */)
+{
+    int16_t *cs16 = (int16_t *)src;
+    float *cf32   = (float *)dst;
+    // convert complex sample in range -INT16_MAX>INT16_MAX to -1.0>1.0
+    int16_t si = cs16[0];
+    int16_t sq = cs16[1];
+    cf32[0]   = (float)si/(float)INT16_MAX;
+    cf32[1] = (float)sq/(float)INT16_MAX;
+    return dst;
+}
+
 int SoapyTCPRemote::readStream(SoapySDR::Stream *stream,
                            void * const *buffs,
                            const size_t numElems,
@@ -323,7 +350,8 @@ int SoapyTCPRemote::readStream(SoapySDR::Stream *stream,
     if (!stream->running)
         return SOAPY_SDR_TIMEOUT;
     // Transfer format on the wire is interleaved sample frames (each fSize) across channels.
-    // We read by making one syscall for the maximum amount, then de-interleaving to buffs.
+    // We read by making one syscall for the maximum amount, then de-interleaving and possibly
+    // converting formats into buffs.
     size_t blkSize = stream->fSize * stream->numChans;
     uint8_t *swamp = (uint8_t *)alloca(blkSize * numElems);
     int status = read(stream->netSock, swamp, blkSize*numElems);
@@ -334,13 +362,20 @@ int SoapyTCPRemote::readStream(SoapySDR::Stream *stream,
     int elems=0;
     int soff=0;
     int boff=0;
+    int bSize=stream->fSize;
+    void *(*cnv)(void *, const void *, size_t) = memcpy;
+    if (fmtout!=fmtwire) {
+        bSize = g_frameSizes.at(fmtout);
+        // TODO: actually check these formats =)
+        cnv = convertCS16toCF32;
+    }
     while (elems<status) {
         for (int c=0; c<stream->numChans; ++c) {
             uint8_t *buf = (uint8_t *)(buffs[c]);
-            memcpy(buf+boff, swamp+soff, stream->fSize);
+            cnv(buf+boff, swamp+soff, stream->fSize);
             soff += stream->fSize;
         }
-        boff += stream->fSize;
+        boff += bSize;
         ++elems;
     }
     return elems;
