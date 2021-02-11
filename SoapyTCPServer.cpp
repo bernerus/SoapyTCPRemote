@@ -26,17 +26,27 @@ struct pipebuf_t {
 
 struct ConnectionInfo
 {
+// RPC connection bits
     // NB: existance of an rpc object implies this is an RPC connection, otherwise data stream
     SoapyRPC *rpc;
+    // our underlying real device
     SoapySDR::Device *dev;
+    // a set of data connections / streams for this device
     std::unordered_set<int> dataIds;
+// data connection bits
+    // the raw socket
     int netSock;
+    // our memory buffer & inter-thread storage
     pipebuf_t *netPipe;
+    // which way are we going
     int direction;
-    double rate;
+    // how big is a single sample frame
     size_t fSize;
+    // how many channels
     size_t numChans;
+    // our underlying device stream
     SoapySDR::Stream *stream;
+    // thread ID (for data pump)
     volatile pthread_t pid;
 };
 
@@ -147,7 +157,6 @@ int createRpc(int sock) {
     SoapySDR_log(SOAPY_SDR_DEBUG, "createRpc()");
     ConnectionInfo conn;
     conn.rpc = new SoapyRPC(sock);
-    conn.rate = 0;
     // read driver and args..
     SoapySDR::Kwargs kwargs;
     kwargs["driver"] = conn.rpc->readString();
@@ -461,12 +470,6 @@ int handleSetupStream(ConnectionInfo &conn) {
         conn.rpc->writeInteger(-2);
         return 0;
     }
-    // check we have a sample rate
-    if (conn.rate==0) {
-        SoapySDR_log(SOAPY_SDR_ERROR, "setupStream: sample rate not set for connection");
-        conn.rpc->writeInteger(-3);
-        return 0;
-    }
     // parse the channel list
     std::vector<size_t> channels;
     size_t cur;
@@ -480,7 +483,6 @@ int handleSetupStream(ConnectionInfo &conn) {
     ConnectionInfo &data = s_connections.at(dataId);
     data.dev = conn.dev;
     data.direction = direction;
-    data.rate = conn.rate;
     data.fSize = g_frameSizes.at(fmt);
     data.numChans = channels.size();
     // open the underlying stream
@@ -497,7 +499,7 @@ int handleSetupStream(ConnectionInfo &conn) {
 
 int internalCloseStream(ConnectionInfo &conn, int dataId) {
     if (s_connections.find(dataId)==s_connections.end()) {
-        SoapySDR_logf(SOAPY_SDR_ERROR, "closeStream: no such data stream ID: %d", dataId);
+        SoapySDR_logf(SOAPY_SDR_WARNING, "closeStream: no such data stream ID: %d", dataId);
         return 0;
     }
     ConnectionInfo &data = s_connections.at(dataId);
@@ -513,6 +515,7 @@ int internalCloseStream(ConnectionInfo &conn, int dataId) {
 int handleCloseStream(ConnectionInfo &conn) {
     SoapySDR_log(SOAPY_SDR_DEBUG, "handleCloseStream()");
     int dataId = conn.rpc->readInteger();
+    conn.rpc->writeInteger(0);
     return internalCloseStream(conn, dataId);
 }
 
@@ -814,7 +817,7 @@ int handleSetSampleRate(ConnectionInfo &conn) {
     int dir = conn.rpc->readInteger();
     int chn = conn.rpc->readInteger();
     double rate = conn.rpc->readDouble();
-    conn.dev->setSampleRate(dir,chn,conn.rate=rate);
+    conn.dev->setSampleRate(dir,chn,rate);
     conn.rpc->writeInteger(0);
     return 0;
 }
@@ -824,7 +827,7 @@ int handleGetSampleRate(ConnectionInfo &conn) {
     SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetSampleRate()");
     int dir = conn.rpc->readInteger();
     int chn = conn.rpc->readInteger();
-    conn.rpc->writeDouble(conn.rate=conn.dev->getSampleRate(dir,chn));
+    conn.rpc->writeDouble(conn.dev->getSampleRate(dir,chn));
     return 0;    
 }
 

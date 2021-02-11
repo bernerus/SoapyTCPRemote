@@ -38,7 +38,6 @@ SoapyTCPRemote::SoapyTCPRemote(const std::string &address, const std::string &po
     int status = loadRemoteDriver();
     if (status<0)
         throw std::runtime_error("unable to load remote driver");
-    rate = 0;
 }
 
 SoapyTCPRemote::~SoapyTCPRemote()
@@ -196,17 +195,13 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
     // grab the native format
     double fs;
     std::string fmtnat = getNativeStreamFormat(direction, channels[0], fs);
-    // first check we have a frame size for both formats, and a sample rate
+    // first check we have a frame size for both formats
     if (g_frameSizes.find(format)==g_frameSizes.end()) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, unknown requested format (%s)", format.c_str());
         return nullptr;
     }
     if (g_frameSizes.find(fmtnat)==g_frameSizes.end()) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, unknown native format (%s)", fmtnat.c_str());
-        return nullptr;
-    }
-    if (this->rate==0) {
-        SoapySDR_log(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, sample Rate not set");
         return nullptr;
     }
     // choose smallest wire format..
@@ -285,6 +280,8 @@ void SoapyTCPRemote::closeStream(SoapySDR::Stream *stream)
     if (stream->running)
         deactivateStream(stream);
     rpc->writeInteger(TCPREMOTE_CLOSE_STREAM);
+    rpc->writeInteger(stream->remoteId);
+    rpc->readInteger(); // ignore return value, but wait!
     close(stream->netSock);
     delete stream;
 }
@@ -359,6 +356,7 @@ int SoapyTCPRemote::readStream(SoapySDR::Stream *stream,
         SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::readStream, error reading data: %s", strerror(errno));
         return SOAPY_SDR_STREAM_ERROR;
     }
+    status /= stream->fSize;
     int elems=0;
     int soff=0;
     int boff=0;
@@ -655,7 +653,7 @@ void SoapyTCPRemote::setSampleRate(const int direction, const size_t channel, co
     rpc->writeInteger(TCPREMOTE_SET_SAMPLE_RATE);
     rpc->writeInteger(direction);
     rpc->writeInteger(channel);
-    rpc->writeDouble(this->rate=rate);
+    rpc->writeDouble(rate);
     rpc->readInteger(); // wait for completion!
 }
 
