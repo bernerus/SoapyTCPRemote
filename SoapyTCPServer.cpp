@@ -848,19 +848,31 @@ int handleGetSampleRateRange(ConnectionInfo &conn) {
     return 0;
 }
 
+int dropRPC(ConnectionInfo &conn, int fd) {
+    SoapySDR_logf(SOAPY_SDR_INFO,"Dropping connection: %d", fd);
+    delete conn.rpc;
+    while (!conn.dataIds.empty()) {
+        int dataId = *(conn.dataIds.begin());
+        internalCloseStream(conn, dataId);
+    }
+    SoapySDR::Device::unmake(conn.dev);
+    s_connections.erase(fd);
+    return 0;
+}
+
 int handleRPC(struct pollfd *pfd) {
+    // get connection..
+    ConnectionInfo &conn = s_connections.at(pfd->fd);
     // oops before expected..
     if (pfd->revents & (POLLERR|POLLHUP)) {
         SoapySDR_log(SOAPY_SDR_ERROR,"ERR or HUP on RPC socket");
-        return -1;
+        return dropRPC(conn, pfd->fd);
     }
-    // get connection..
-    ConnectionInfo &conn = s_connections.at(pfd->fd);
     // dispatch requested RPC..
     int call = conn.rpc->readInteger();
     if (call<0) {
         SoapySDR_log(SOAPY_SDR_ERROR, "EOF or error on RPC socket");
-        return -1;
+        return dropRPC(conn, pfd->fd);
     }
     SoapySDR_logf(SOAPY_SDR_DEBUG, "handleRPC: call=%d", call);
     switch (call) {
@@ -868,18 +880,10 @@ int handleRPC(struct pollfd *pfd) {
     default:
         SoapySDR_logf(SOAPY_SDR_ERROR,"Unknown RPC call: %d", call);
         conn.rpc->writeInteger(-1000);
-        return -1;
+        return 0;
     // special - dropping connection
     case TCPREMOTE_DROP_RPC:
-        SoapySDR_logf(SOAPY_SDR_INFO,"Dropping connection: %d", pfd->fd);
-        delete conn.rpc;
-        while (!conn.dataIds.empty()) {
-            int dataId = *(conn.dataIds.begin());
-            internalCloseStream(conn, dataId);
-        }
-        SoapySDR::Device::unmake(conn.dev);
-        s_connections.erase(pfd->fd);
-        return 0;
+        return dropRPC(conn, pfd->fd);
     // identification API
     case TCPREMOTE_GET_HARDWARE_KEY:
         return handleGetHardwareKey(conn);
