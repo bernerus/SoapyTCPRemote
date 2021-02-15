@@ -31,5 +31,13 @@ target_link_libraries(SoapyTCPServer
     SoapySDR
     pthread
 )
+
+add_executable(SoapyTCPTest
+    SoapyTCPTest.cpp
+)
+target_link_libraries(SoapyTCPTest
+    SoapySDR
+)
+
 include(GNUInstallDirs)
 install(TARGETS SoapyTCPServer DESTINATION ${CMAKE_INSTALL_BINDIR})

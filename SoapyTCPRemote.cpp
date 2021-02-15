@@ -698,10 +698,70 @@ SoapySDR::RangeList SoapyTCPRemote::getSampleRateRange(const int direction, cons
     return list;
 }
 
+std::string getConfFile() {
+    // We support a configuration file in one of:
+    // [$XDG_CONFIG_DIRS]/SoapyTCPRemote.conf, $HOME/.config/SoapyTCPRemote.conf
+    SoapySDR_log(SOAPY_SDR_TRACE, "getConfFile");
+    std::string tst="";
+    if (getenv("XDG_CONFIG_DIRS")!=nullptr) {
+        std::string env = getenv("XDG_CONFIG_DIRS");
+        size_t pos, nxt=-1;
+        do {
+            pos = nxt+1;
+            size_t nxt = env.find(':', pos);
+            tst = env.substr(pos,nxt-pos);
+            tst += "/SoapyTCPRemote.conf";
+            if (access(tst.c_str(), R_OK)==0)
+                goto done;
+        } while (nxt!=std::string::npos);
+    }
+    tst = "/etc/xdg/SoapyTCPRemote.conf";
+    if (access(tst.c_str(), R_OK)==0)
+        goto done;
+    if (getenv("HOME")!=nullptr) {
+        tst = getenv("HOME");
+        tst += "/.config/SoapyTCPRemote.conf";
+        if (access(tst.c_str(), R_OK)==0)
+            goto done;
+    }
+    tst = "";
+done:
+    SoapySDR_logf(SOAPY_SDR_TRACE, "SoapySDRRemote::getConfFile()=%s", tst.c_str());
+    return tst;
+}
+
+std::string getConfValue(const std::string &key) {
+    SoapySDR_logf(SOAPY_SDR_TRACE, "getConfValue(%s)", key.c_str());
+    std::string rv = "";
+    std::string cf = getConfFile();
+    FILE *fp = nullptr;
+    if (cf.length()>0 && (fp=fopen(cf.c_str(), "r"))!=nullptr) {
+        char line[80];
+        while (fgets(line, sizeof(line), fp)) {
+            std::string arg = line;
+            if (arg[0]=='#')
+                continue;
+            arg = arg.substr(0, arg.length()-1);
+            size_t off = arg.find(key, 0);
+            if (std::string::npos==off)
+                continue;
+            off = arg.find('=', off);
+            if (std::string::npos==off)
+                continue;
+            rv = arg.substr(off+1);
+            break;
+        }
+        fclose(fp);
+    }
+    return rv;
+}
+
+// NB: this is called with random (can be NULL) parameters when enumeration is done by an app,
+// and with *merged* parameters (app & enumeration response) when a device is created by Device::make().
 SoapySDR::KwargsList findTCPRemote(const SoapySDR::Kwargs &args)
 {
     SoapySDR_log(SOAPY_SDR_TRACE, "findTCPRemote");
-    
+
     SoapySDR::KwargsList results;
     
     // We MUST have:
@@ -710,15 +770,18 @@ SoapySDR::KwargsList findTCPRemote(const SoapySDR::Kwargs &args)
     // We MAY have:
     // tcpremote:args    - driver arguments when creating
     // We ensure mandatory args are present, and parse them
+    std::string address = getConfValue("address");
     if (args.find("tcpremote:address")==args.end()) {
-        SoapySDR_log(SOAPY_SDR_ERROR, "Missing tcpremote:address");
-        return results;
+        SoapySDR_logf(SOAPY_SDR_DEBUG, "Missing tcpremote:address, using: %s", address.c_str());
+    } else {
+         address = args.at("tcpremote:address");
     }
+    std::string driver = getConfValue("driver");
     if (args.find("tcpremote:driver")==args.end()) {
-        SoapySDR_log(SOAPY_SDR_ERROR, "Missing tcpremote:driver");
-        return results;
+        SoapySDR_logf(SOAPY_SDR_DEBUG, "Missing tcpremote:driver, using: %s", driver.c_str());
+    } else {
+        driver = args.at("tcpremote:driver");
     }
-    std::string address = args.at("tcpremote:address");
     size_t colon = address.find(':',0);
     // no port, default to 0x50AF (20655)
     int port = 0x50AF;
@@ -732,7 +795,7 @@ SoapySDR::KwargsList findTCPRemote(const SoapySDR::Kwargs &args)
     soapyInfo["device"] = "TCP remote: "+address;
     soapyInfo["address"] = address;
     soapyInfo["port"] = std::to_string(port);
-    soapyInfo["tcpremote:driver"] = args.at("tcpremote:driver");
+    soapyInfo["tcpremote:driver"] = driver;
     if (args.find("tcpremote:args")!=args.end())
         soapyInfo["tcpremote:args"] = args.at("tcpremote:args");
     else
