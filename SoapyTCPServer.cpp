@@ -217,15 +217,8 @@ void *netPump(void *ctx) {
     // you had 1 job... read that pipe and stuff down network
     size_t elemSize = conn->fSize*conn->numChans;
     size_t numElems = BUFSIZ/elemSize;
-    void *wrbuf = alloca(numElems*elemSize);
+    uint8_t wrbuf[numElems*elemSize];
     int nrd;
-/*        // set TCP send buffer to twice expected write size, tries to avoid overruns if TCP stalls
-        size_t sockBuf = bufSize*2;
-        if (setsockopt(conn->netSock, SOL_SOCKET, SO_SNDBUF, &sockBuf, sizeof(sockBuf)))
-            SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: unable to adjust send buffer, may overrun");
-        socklen_t sbl = sizeof(sockBuf);
-        if (getsockopt(conn->netSock, SOL_SOCKET, SO_SNDBUF, &sockBuf, &sbl))
-            SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: unable to read send buffer length, WILL overrun!");*/
     SoapySDR_logf(SOAPY_SDR_TRACE, "netPump: start: %d", conn->netSock);
     struct timespec lt;
     clock_gettime(CLOCK_MONOTONIC, &lt);
@@ -258,18 +251,19 @@ void *dataPump(void *ctx) {
         size_t elemSize = conn->fSize * conn->numChans;
         size_t chnSize = numElems * conn->fSize;
         size_t readSize = chnSize * conn->numChans;
+        // inter-thread pipe large enough to hold 10xMTU, should cope with TCP jitter
         size_t pipeSize = readSize * 10;
-        // allocate buffers for channel data (0.1s) and pipe for ~1 second of network data
-        void **buffs = (void **)alloca(conn->numChans);
-        uint8_t *cbuf = (uint8_t *)alloca(readSize);
-        uint8_t *pbuf = (uint8_t *)alloca(readSize);
+        // allocate buffers & pointers to them
+        void *buffs[conn->numChans];
+        uint8_t cbuf[readSize];
+        uint8_t pbuf[readSize];
         conn->netPipe = newpipe(pipeSize);
+        for (size_t c=0; c<conn->numChans; ++c)
+            buffs[c] = cbuf+(c*chnSize);
         SoapySDR_logf(SOAPY_SDR_TRACE, "dataPump: numElems=%d", numElems);
         // start network pump
         pthread_t fpid;
         pthread_create(&fpid, nullptr, netPump, conn);
-        for (size_t c=0; c<conn->numChans; ++c)
-            buffs[c] = cbuf+(c*chnSize);
         // pump until told to stop!
         struct timespec lt;
         clock_gettime(CLOCK_MONOTONIC, &lt);
@@ -286,7 +280,35 @@ void *dataPump(void *ctx) {
                     continue;
                 break;
             }
-            // interleave samples across channels for network format
+            // interleave samples across channels for network format:
+            // Soapy readStream (channelized) format:
+            //            <--------- nread -------//--->
+            //            +-----------------//---+  -+    ^
+            // buffs[0]-> | channel 0 samples..  |   |    |
+            //            +-----------------//---+   |    |
+            // buffs[1]-> | channel 1 samples..  |   |    |
+            //            +-----------------//---+ cbuf   |
+            // ...        | ...                  |   |  numChans
+            //            +-----------------//---+   |    |
+            // buffs[n]-> | channel n samples..  |   |    |
+            //            +-----------------//---+   v    v
+            //
+            // Our network (interleaved) format:
+            //            <---- numChans -//--->
+            // one sample +---------------//---+  -+    ^
+            // frame per  | ch0, ch1, ..., chN |   |    |
+            // channel    +---------------//---+  pbuf  |
+            //            | ...                |   |   nread
+            //            +---------------//---+   v    v
+            //
+            // WHY? Because we would like to reduce latency of delivery,
+            // while transferring data as a byte stream in variable sized
+            // (smallish) chunks over memory pipes and TCP/IP.
+            // The readStream() API at the receiver requires us to return
+            // an equal number of samples from each channel, so we choose
+            // to send one sample from each channel through the plumbing
+            // for all nread blocks. A receiver can then deliver data to
+            // clients after every block.
             uint8_t *pn = pbuf;
             for (int idx=0; idx<nread; ++idx) {
                 size_t eoff = idx*conn->fSize;
@@ -1081,7 +1103,7 @@ int main(int argc, char **argv) {
     while (true) {
         // allocate maximum possible number of pollfds, then omit data stream connections
         size_t nfds = s_connections.size()+1;
-        struct pollfd *pfds = (struct pollfd *)alloca(nfds);
+        struct pollfd pfds[nfds];
         pfds[0].fd = lsock;
         pfds[0].events = POLLIN;
         pfds[0].revents = 0;
