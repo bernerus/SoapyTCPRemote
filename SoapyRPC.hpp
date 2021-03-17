@@ -1,6 +1,6 @@
 // SoapyRPC.hpp - remote procedure call endpoint
 // Copyright (c) 2021 Phil Ashby
-// License-SPDX ...
+// SPDX-License-Identifier: BSL-1.0
 
 #ifndef SoapyRPC_hpp
 #define SoapyRPC_hpp
@@ -9,14 +9,17 @@
 // in the tradition of many 'simple xxx' internet
 // protocols.
 
-#include <SoapySDR/Logger.hpp>
 #include <stdio.h>
-#include <string.h>
+#include <cstring>
+#include <SoapySDR/Logger.hpp>
 
 // map of format names to frame sizes
 const std::map<std::string, size_t> g_frameSizes = {
     { "CS8", 2 }, { "CS16", 4 }, { "CF32", 8 },
 };
+
+// RPC separator
+const std::string TCPREMOTE_RPC_SEP = "--";
 
 // RPC codes
 enum

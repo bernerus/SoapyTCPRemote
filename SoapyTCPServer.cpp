@@ -890,6 +890,11 @@ int handleRPC(struct pollfd *pfd) {
         SoapySDR_log(SOAPY_SDR_ERROR,"ERR or HUP on RPC socket");
         return dropRPC(conn, pfd->fd);
     }
+    // ensure we have a separator
+    if (conn.rpc->readString() != TCPREMOTE_RPC_SEP) {
+        SoapySDR_log(SOAPY_SDR_ERROR,"Missing separator on RPC socket (out of sync?)");
+        return dropRPC(conn, pfd->fd);
+    }
     // dispatch requested RPC..
     int call = conn.rpc->readInteger();
     if (call<0) {
