@@ -40,10 +40,10 @@ struct ConnectionInfo
     pipebuf_t *netPipe;
     // which way are we going
     int direction;
-    // how big is a single sample frame
-    size_t fSize;
-    // how many channels
-    size_t numChans;
+    // selected stream format
+    std::string format;
+    // selected channels
+    std::vector<size_t> channels;
     // our underlying device stream
     SoapySDR::Stream *stream;
     // thread ID (for data pump)
@@ -215,7 +215,7 @@ long tsdiff(struct timespec *t1, struct timespec *t2) {
 void *netPump(void *ctx) {
     ConnectionInfo *conn = (ConnectionInfo *)ctx;
     // you had 1 job... read that pipe and stuff down network
-    size_t elemSize = conn->fSize*conn->numChans;
+    size_t elemSize = g_frameSizes.at(conn->format)*conn->channels.size();
     size_t numElems = BUFSIZ/elemSize;
     uint8_t wrbuf[numElems*elemSize];
     int nrd;
@@ -244,21 +244,66 @@ void *dataPump(void *ctx) {
         SoapySDR_log(SOAPY_SDR_ERROR, "dataPump: failed to activate underlying stream");
         return nullptr;
     }
+    // special case: one channel, in native format, with direct buffers supported - we can avoid lots of work
+    double full;
+    if (1==conn->channels.size()
+        && conn->dev->getNativeStreamFormat(conn->direction, conn->channels.at(0), full)==conn->format
+        && conn->dev->getNumDirectAccessBuffers(conn->stream) > 0) {
+        SoapySDR_log(SOAPY_SDR_DEBUG, "dataPump: using direct buffers");
+        if (SOAPY_SDR_RX!=conn->direction) {
+            SoapySDR_log(SOAPY_SDR_ERROR, "dataPump: transmit not supported - sorry :=(");
+            conn->dev->deactivateStream(conn->stream);
+            return nullptr;
+        }
+        // make the network output pipe (10x MTU for jitter buffering)
+        size_t fSize = g_frameSizes.at(conn->format);
+        size_t pipeSize = conn->dev->getStreamMTU(conn->stream) * fSize * 10;
+        conn->netPipe = newpipe(pipeSize);
+        // start network pump
+        pthread_t fpid;
+        pthread_create(&fpid, nullptr, netPump, conn);
+        while (conn->pid!=0) {
+            // map a buffer, copy to pipe, repeat => simples :)
+            size_t handle;
+            const void *pBuf;
+            int flags = 0;
+            long long timeNs;
+            long timeoutUs = 1000000;
+            int err = conn->dev->acquireReadBuffer(conn->stream, handle, &pBuf, flags, timeNs, timeoutUs);
+            if (err<0) {
+                SoapySDR_logf(SOAPY_SDR_ERROR, "dataPump: error mapping direct buffer: %s", SoapySDR_errToStr(err));
+                break;
+            }
+            if (pipewrite((void *)pBuf, fSize, err, conn->netPipe)<0) {
+                SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: overrun network pipe, data loss");
+            }
+            conn->dev->releaseReadBuffer(conn->stream, handle);
+        }
+        // final write to ensure netPump wakes up and terminates
+        pipewrite((void *)".", 1, 1, conn->netPipe);
+        pthread_join(fpid, nullptr);
+        free(conn->netPipe);
+        // stop the byte flood :=)
+        conn->dev->deactivateStream(conn->stream);
+        return nullptr;
+    }
     // which direction?
     if (SOAPY_SDR_RX==conn->direction) {
         // use maximum number of elements/samples per read supported by the underlying driver
         size_t numElems = conn->dev->getStreamMTU(conn->stream);
-        size_t elemSize = conn->fSize * conn->numChans;
-        size_t chnSize = numElems * conn->fSize;
-        size_t readSize = chnSize * conn->numChans;
+        size_t fSize = g_frameSizes.at(conn->format);
+        size_t numChans = conn->channels.size();
+        size_t elemSize = fSize * numChans;
+        size_t chnSize = numElems * fSize;
+        size_t readSize = chnSize * numChans;
         // inter-thread pipe large enough to hold 10xMTU, should cope with TCP jitter
         size_t pipeSize = readSize * 10;
         // allocate buffers & pointers to them
-        void *buffs[conn->numChans];
+        void *buffs[numChans];
         uint8_t cbuf[readSize];
         uint8_t pbuf[readSize];
         conn->netPipe = newpipe(pipeSize);
-        for (size_t c=0; c<conn->numChans; ++c)
+        for (size_t c=0; c<numChans; ++c)
             buffs[c] = cbuf+(c*chnSize);
         SoapySDR_logf(SOAPY_SDR_TRACE, "dataPump: numElems=%d", numElems);
         // start network pump
@@ -311,11 +356,11 @@ void *dataPump(void *ctx) {
             // clients after every block.
             uint8_t *pn = pbuf;
             for (int idx=0; idx<nread; ++idx) {
-                size_t eoff = idx*conn->fSize;
-                for (size_t c=0; c<conn->numChans; ++c) {
+                size_t eoff = idx*fSize;
+                for (size_t c=0; c<numChans; ++c) {
                     uint8_t *pc = (uint8_t *)buffs[c];
-                    memcpy(pn, pc+eoff, conn->fSize);
-                    pn += conn->fSize;
+                    memcpy(pn, pc+eoff, fSize);
+                    pn += fSize;
                 }
             }
             struct timespec ts;
@@ -505,8 +550,8 @@ int handleSetupStream(ConnectionInfo &conn) {
     ConnectionInfo &data = s_connections.at(dataId);
     data.dev = conn.dev;
     data.direction = direction;
-    data.fSize = g_frameSizes.at(fmt);
-    data.numChans = channels.size();
+    data.format = fmt;
+    data.channels = channels;
     // open the underlying stream
     data.stream = conn.dev->setupStream(direction, fmt, channels, args);
     if (!data.stream) {

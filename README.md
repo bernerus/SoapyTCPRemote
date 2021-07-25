@@ -34,13 +34,13 @@ After which you should be able to check the driver is installed with `SoapySDRUt
 the server (on the device where your SDR is attached) `SoapyTCPServer`.
 
 ## Usage
- * Run the server on the target device: `SoapyTCPRemote`
+ * Run the server on the target device: `SoapyTCPServer`
  * Connect from the client: `SoapySDRUtil --probe=driver=tcpremote,tcpremote:address=<serverIP>,tcpremote:driver=<serverSDR>`
- * Once you have working conneciton string, use in your favourite SDR package such as gqrx.
+ * Once you have a working conneciton string, use in your favourite SDR package such as gqrx.
  
 ## Debugging
 So it's not working first time? You can get significant details by setting the SoapySDR log level in the environment:
  * `SOAPY_SDR_LOG_LEVEL=<VALUE>` where `<VALUE>` is one of: `ERROR, WARNING, NOTICE, INFO (def), DEBUG, TRACE`
  
 ## Feedback
-Feel free to raise issues for discussion or problems or features, better submit PRs to fix my poor code please!
+Feel free to raise issues for discussion or problems or features, better yet: submit PRs to fix my poor code please!
