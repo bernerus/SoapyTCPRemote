@@ -886,7 +886,7 @@ SoapySDR::KwargsList findTCPRemote(const SoapySDR::Kwargs &args)
     if (args.find("tcpremote:args")!=args.end())
         soapyInfo["tcpremote:args"] = args.at("tcpremote:args");
     else
-        soapyInfo["tcpremote:args"] = "";
+        soapyInfo["tcpremote:args"] = getConfValue("args");
     results.push_back(soapyInfo);
     return results;
 }
