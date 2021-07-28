@@ -8,6 +8,7 @@ find_package(SoapySDR "0.6.0" NO_MODULE)
 if (NOT SoapySDR_FOUND)
     message(FATAL_ERROR "Soapy SDR development files not found...") 
 endif ()
+find_package(Threads REQUIRED)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -23,13 +24,16 @@ SOAPY_SDR_MODULE_UTIL(
     SOURCES
     SoapyTCPRemote.cpp
 )
+target_link_libraries(TCPRemoteSupport
+    Threads::Threads
+)
 
 add_executable(SoapyTCPServer
     SoapyTCPServer.cpp
 )
 target_link_libraries(SoapyTCPServer
     SoapySDR
-    pthread
+    Threads::Threads
 )
 
 add_executable(SoapyTCPTest

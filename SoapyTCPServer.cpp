@@ -3,11 +3,12 @@
 //  SPDX-License-Identifier: BSL-1.0
 
 // Design approach is KISS, main thread accepts connections into a
-// map, handles RPCs.
+// map, handles RPCs. Log connections exist separately (allowing
+// custom network loggers).
 // Worker threads are created per data stream to pump in/out.
-#include <SoapySDR/Logger.hpp>
 #include <SoapySDR/Device.hpp>
 #include "SoapyRPC.hpp"
+#include "SoapyLog.hpp"
 #include <pthread.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -48,6 +49,9 @@ struct ConnectionInfo
     SoapySDR::Stream *stream;
     // thread ID (for data pump)
     volatile pthread_t pid;
+// log stream bits
+    FILE *log;
+    SoapySDRLogLevel level;
 };
 
 pipebuf_t *newpipe(int size) {
@@ -157,6 +161,7 @@ int createRpc(int sock) {
     SoapySDR_log(SOAPY_SDR_DEBUG, "createRpc()");
     ConnectionInfo conn;
     conn.rpc = new SoapyRPC(sock);
+    conn.log = nullptr;     // ensure we aren't treated as LOG stream
     // read driver and args..
     SoapySDR::Kwargs kwargs;
     kwargs["driver"] = conn.rpc->readString();
@@ -195,6 +200,7 @@ int createData(int sock, int type) {
     SoapySDR_logf(SOAPY_SDR_DEBUG, "createData, type: %d", type);
     ConnectionInfo conn;
     conn.rpc = nullptr;     // ensure we aren't treated as RPC stream
+    conn.log = nullptr;     // ensure we aren't treated as LOG stream
     conn.netSock = sock;
     // all good - add to map and respond with map key
     // NB: we write to raw socket as stdio stream may be read-only..
@@ -203,6 +209,31 @@ int createData(int sock, int type) {
     int ilen = sprintf(id,"%d\n",sock);
     write(sock, id, ilen);
     SoapySDR_logf(SOAPY_SDR_INFO, "New data connection: %d", sock);
+    return 0;
+}
+
+static SoapySDRLogLevel s_defaultLogLevel;
+
+int createLog(int sock) {
+    SoapySDR_log(SOAPY_SDR_DEBUG, "createLog()");
+    ConnectionInfo conn;
+    conn.rpc = nullptr;     // ensure we aren't treated as RPC stream
+    conn.netSock = sock;
+    conn.log = fdopen(sock, "r+");
+    setlinebuf(conn.log);
+    // read log level from client
+    int level = (SoapySDRLogLevel)SOAPY_SDR_INFO;
+    char buf[10];
+    if(!fgets(buf, sizeof(buf), conn.log)) {
+        SoapySDR_logf(SOAPY_SDR_ERROR, "fgets() on log stream: %s", strerror(errno));
+        fclose(conn.log);
+        return -1;
+    }
+    sscanf(buf, "%d", (int*)&level);
+    conn.level = (SoapySDRLogLevel)level;
+    s_connections[sock] = conn;
+    fprintf(conn.log, "%d\n", sock);    // write our id (map key)
+    SoapySDR_logf(SOAPY_SDR_INFO, "New log connection: %d @ %d", sock, level);
     return 0;
 }
 
@@ -412,6 +443,8 @@ int handleListen(struct pollfd *pfd) {
         // create appropriate ConnectionInfo and insert into map..
         if (TCPREMOTE_RPC_LOAD==type)
             return createRpc(sock);
+        else if (TCPREMOTE_LOG_STREAM==type)
+            return createLog(sock);
         else if (TCPREMOTE_DATA_SEND==type || TCPREMOTE_DATA_RECV==type)
             return createData(sock, type);
         // ..or drop it as unknown.
@@ -927,9 +960,7 @@ int dropRPC(ConnectionInfo &conn, int fd) {
     return 0;
 }
 
-int handleRPC(struct pollfd *pfd) {
-    // get connection..
-    ConnectionInfo &conn = s_connections.at(pfd->fd);
+int handleRPC(struct pollfd *pfd, ConnectionInfo &conn) {
     // oops before expected..
     if (pfd->revents & (POLLERR|POLLHUP)) {
         SoapySDR_log(SOAPY_SDR_ERROR,"ERR or HUP on RPC socket");
@@ -1117,6 +1148,26 @@ int handleRPC(struct pollfd *pfd) {
     return 0;
 }
 
+static bool s_logged;
+static void handleLog(const SoapySDRLogLevel level, const char *message) {
+    // pass to all connected log streams if level is appropriate
+    s_logged = true;
+    for (auto it = s_connections.begin(); it!=s_connections.end(); ++it) {
+        ConnectionInfo &ci = (*it).second;
+        if (ci.log && ci.level) {
+            // it's a log stream
+            if (level > ci.level)
+                continue;
+            // send level then original message
+            fprintf(ci.log, "%d:%s\n", level, message);
+        }
+    }
+    // now our own log
+    if (level > s_defaultLogLevel)
+        return;
+    defaultLogHandler(level, message);
+}
+
 int usage() {
     puts("usage: SoapyTCPServer [-?|--help] [-l <listen host/IP:default *>] [-p <listen port: default 20655>]");
     return 0;
@@ -1124,7 +1175,7 @@ int usage() {
 
 int main(int argc, char **argv) {
     const char *host = "0.0.0.0";
-    const char *port = "20655";           // 0x50AF
+    const char *port = "20655";           // 0x50AF ~= SOAP
     for (int arg=1; arg<argc; ++arg) {
         if (strncmp(argv[arg],"-?",2)==0 || strncmp(argv[arg],"--h",3)==0)
             return usage();
@@ -1133,6 +1184,12 @@ int main(int argc, char **argv) {
         else if (strncmp(argv[arg],"-p",2)==0)
             port = argv[++arg];
     }
+    // Detect current log level - shenannigans required as we cannot simply read the value
+    s_defaultLogLevel = detectLogLevel();
+    printf("SoapyTCPServer: log level=%d\n", (int)s_defaultLogLevel);
+    // Now collect all log levels, we filter per-client ourselves
+    SoapySDR_registerLogHandler(handleLog);
+    SoapySDR_setLogLevel(SOAPY_SDR_TRACE);
     printf("SoapyTCPServer: listening on: %s:%s\n", host, port);
     // Set up listen socket
     struct addrinfo *res = nullptr;
@@ -1159,7 +1216,7 @@ int main(int argc, char **argv) {
         pfds[0].revents = 0;
         nfds = 1;
         for (auto it=s_connections.begin(); it!=s_connections.end(); ++it) {
-            if (it->second.rpc) {  // RPC connection
+            if (it->second.rpc || it->second.log) {  // RPC or LOG connection
                 pfds[nfds].fd = it->first;
                 pfds[nfds].events = POLLIN;
                 pfds[nfds].revents = 0;
@@ -1173,10 +1230,22 @@ int main(int argc, char **argv) {
         // Handle listen socket events
         if (pfds[0].revents && handleListen(pfds)<0)
             break;
-        // Handle RPC socket events
-        for (size_t idx=1; idx<nfds; ++idx)
-            if (pfds[idx].revents && handleRPC(pfds+idx)<0)
-                return 4;
+        // Handle RPC or LOG socket events
+        for (size_t idx=1; idx<nfds; ++idx) {
+            if (pfds[idx].revents) {
+                ConnectionInfo &ci = s_connections.at(pfds[idx].fd);
+                if (ci.rpc) {
+                    if (handleRPC(pfds+idx, ci)<0)
+                        return 4;
+                }
+                if (ci.log) {
+                    // any input or error on log stream means we're done
+                    fclose(ci.log);
+                    s_connections.erase(pfds[idx].fd);
+                    SoapySDR_logf(SOAPY_SDR_INFO, "log stream closed: %d", pfds[idx].fd);
+                }
+            }
+        }
     }
     s_connections.clear();
     close(lsock);

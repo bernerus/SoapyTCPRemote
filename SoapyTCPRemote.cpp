@@ -3,8 +3,7 @@
 //  SPDX-License-Identifier: BSL-1.0
 
 #include "SoapyTCPRemote.hpp"
-
-#include <SoapySDR/Logger.hpp>
+#include "SoapyLog.hpp"
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -31,11 +30,14 @@ SoapyTCPRemote::SoapyTCPRemote(const std::string &address, const std::string &po
 {
     SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::<cons>(%s,%s,%s,%s)",
         address.c_str(), port.c_str(), remdriver.c_str(), remargs.c_str());
+    int status = connectLogStream(detectLogLevel());
+    if (status<0)
+        throw std::runtime_error("unable to connect log stream");
     int sock = connect();
     if (sock<0)
         throw std::runtime_error("unable to connect to remote");
     rpc = new SoapyRPC(sock);
-    int status = loadRemoteDriver();
+    status = loadRemoteDriver();
     if (status<0)
         throw std::runtime_error("unable to load remote driver");
 }
@@ -48,6 +50,11 @@ SoapyTCPRemote::~SoapyTCPRemote()
         rpc->writeInteger(TCPREMOTE_DROP_RPC);
         delete rpc;
         rpc = nullptr;
+    }
+    if (log) {
+        // writing to this stream terminates it via the remote end
+        write(fileno(log), "\n", 1);
+        logThread.join();
     }
 }
 
@@ -91,6 +98,54 @@ int SoapyTCPRemote::loadRemoteDriver() const
     rpc->writeString(remoteDriver);
     rpc->writeString(remoteArgs);
     return rpc->readInteger();
+}
+
+int SoapyTCPRemote::connectLogStream(SoapySDRLogLevel level)
+{
+    SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::connectLogStream");
+    // first connect a new socket
+    int sock = connect();
+    if (sock<0)
+        return sock;
+    log = fdopen(sock, "r+");
+    if (!log) {
+        SoapySDR_logf(SOAPY_SDR_ERROR, "fdopen() log stream: %s", strerror(errno));
+        return -1;
+    }
+    setlinebuf(log);
+    // identify this as the log stream, set level, obtain remote handle
+    fprintf(log, "%d\n%d\n", TCPREMOTE_LOG_STREAM, (int)level);
+    char ret[10];
+    if (!fgets(ret, sizeof(ret), log)) {
+        SoapySDR_logf(SOAPY_SDR_ERROR, "fgets() log identifier: %s", strerror(errno));
+        return -1;
+    }
+    if (sscanf(ret, "%d", &logId)!=1) {
+        SoapySDR_log(SOAPY_SDR_ERROR, "sscanf() logId: not an integer");
+        return -1;
+    }
+    logThread = std::thread(processLogStream, this);
+    return 0;
+}
+
+void SoapyTCPRemote::processLogStream(SoapyTCPRemote *rem)
+{
+    char msg[256];
+    while (fgets(msg, sizeof(msg), rem->log)) {
+        // parse level from message, write to local handler
+        SoapySDRLogLevel lev = SOAPY_SDR_ERROR;
+        if (sscanf(msg, "%d:", (int*)&lev)>0) {
+            msg[0]='r';
+            msg[1]='<';
+        } else {
+            msg[0]='?';
+            msg[1]='<';
+        }
+        // replace trailing newline
+        msg[strlen(msg)-1]='>';
+        SoapySDR_log(lev, msg);
+    }
+    fclose(rem->log);
 }
 
 // Identification API

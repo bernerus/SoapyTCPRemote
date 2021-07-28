@@ -26,10 +26,11 @@ enum
 {
     // internal specials - socket type identifier, single digit value please..
     TCPREMOTE_RPC_LOAD,
+    TCPREMOTE_LOG_STREAM,
     TCPREMOTE_DATA_SEND,
     TCPREMOTE_DATA_RECV,
     // identification API
-    TCPREMOTE_GET_HARDWARE_KEY,
+    TCPREMOTE_GET_HARDWARE_KEY = 10,
     TCPREMOTE_GET_HARDWARE_INFO,
     // channel API
     TCPREMOTE_SET_FRONTEND_MAPPING,

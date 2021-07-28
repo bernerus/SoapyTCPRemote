@@ -5,6 +5,8 @@
 #ifndef SoapyTCPRemote_hpp
 #define SoapyTCPRemote_hpp
 
+#include <thread>
+
 #include <SoapySDR/Device.hpp>
 #include <SoapySDR/Registry.hpp>
 #include <SoapySDR/Version.hpp>
@@ -27,8 +29,14 @@ private:
     int connect() const;
     // RPC handler
     SoapyRPC *rpc;
+    // Log stream, ID and thread
+    FILE *log;
+    int logId;
+    std::thread logThread;
     // helpers
     int loadRemoteDriver() const;
+    int connectLogStream(SoapySDRLogLevel level);
+    static void processLogStream(SoapyTCPRemote *rem);
 public:
     SoapyTCPRemote(const std::string &address, const std::string &port, const std::string &remdriver, const std::string &remargs);
     ~SoapyTCPRemote();
