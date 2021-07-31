@@ -306,10 +306,12 @@ void *dataPump(void *ctx) {
             long timeoutUs = 1000000;
             int err = conn->dev->acquireReadBuffer(conn->stream, handle, &pBuf, flags, timeNs, timeoutUs);
             if (err<0) {
-                SoapySDR_logf(SOAPY_SDR_ERROR, "dataPump: error mapping direct buffer: %s", SoapySDR_errToStr(err));
                 // non-fatal overflow, retry
-                if (SOAPY_SDR_OVERFLOW==err)
+                if (SOAPY_SDR_OVERFLOW==err) {
+                    SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: overrun direct buffer, data loss");
                     continue;
+                }
+                SoapySDR_logf(SOAPY_SDR_ERROR, "dataPump: error mapping direct buffer: %s", SoapySDR_errToStr(err));
                 break;
             }
             if (bDirect) {
