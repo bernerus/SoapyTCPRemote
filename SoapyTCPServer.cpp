@@ -288,11 +288,15 @@ void *dataPump(void *ctx) {
         }
         // make the network output pipe (10x MTU for jitter buffering)
         size_t fSize = g_frameSizes.at(conn->format);
-        size_t pipeSize = conn->dev->getStreamMTU(conn->stream) * fSize * 10;
+        size_t mtu = conn->dev->getStreamMTU(conn->stream);
+        size_t pipeSize = mtu * fSize * 10;
         conn->netPipe = newpipe(pipeSize);
-        // start network pump
+        // start network pump, unless asked to use direct write
+        bool bDirect = nullptr!=getenv("SOAPY_TCPREMOTE_DIRECT_WRITE");
         pthread_t fpid;
-        pthread_create(&fpid, nullptr, netPump, conn);
+        if (!bDirect) {
+            pthread_create(&fpid, nullptr, netPump, conn);
+        }
         while (conn->pid!=0) {
             // map a buffer, copy to pipe, repeat => simples :)
             size_t handle;
@@ -305,14 +309,22 @@ void *dataPump(void *ctx) {
                 SoapySDR_logf(SOAPY_SDR_ERROR, "dataPump: error mapping direct buffer: %s", SoapySDR_errToStr(err));
                 break;
             }
-            if (pipewrite((void *)pBuf, fSize, err, conn->netPipe)<0) {
-                SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: overrun network pipe, data loss");
+            if (bDirect) {
+                if (send(conn->netSock, pBuf, err*fSize, MSG_DONTWAIT)!=(int)(err*fSize)) {
+                    SoapySDR_logf(SOAPY_SDR_WARNING, "dataPump: direct write error: %s", strerror(errno));
+                }
+            } else {
+                if (pipewrite((void *)pBuf, fSize, err, conn->netPipe)<0) {
+                    SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: overrun network pipe, data loss");
+                }
             }
             conn->dev->releaseReadBuffer(conn->stream, handle);
         }
-        // final write to ensure netPump wakes up and terminates
-        pipewrite((void *)".", 1, 1, conn->netPipe);
-        pthread_join(fpid, nullptr);
+		if (!bDirect) {
+        	// final write to ensure netPump wakes up and terminates
+        	pipewrite((void *)".", 1, 1, conn->netPipe);
+        	pthread_join(fpid, nullptr);
+		}
         free(conn->netPipe);
         // stop the byte flood :=)
         conn->dev->deactivateStream(conn->stream);
