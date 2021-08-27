@@ -2,7 +2,7 @@
 # Build Soapy SDR support module for simple TCP remote RX pipe
 ######################################################################## 
 cmake_minimum_required(VERSION 2.8.7)
-project(SoapyFCDPP CXX C)
+project(SoapyTCPRemote CXX C)
 
 find_package(SoapySDR "0.6.0" NO_MODULE)
 if (NOT SoapySDR_FOUND)
