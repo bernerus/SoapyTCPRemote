@@ -181,10 +181,15 @@ int createRpc(int sock) {
         }
     } while (nxt != std::string::npos);
     // make the device
-    conn.dev = SoapySDR::Device::make(kwargs);
+    try {
+        conn.dev = SoapySDR::Device::make(kwargs);
+    } catch(const std::exception &ex) {
+        conn.dev = nullptr;
+        SoapySDR_logf(SOAPY_SDR_ERROR,"exception from Device::make(): %s", ex.what());
+    }
     if (!conn.dev) {
         // oops - report failure to client and drop connection
-        SoapySDR_logf(SOAPY_SDR_ERROR,"failed to create SoapySDR::Device: %s", kwargs["driver"]);
+        SoapySDR_logf(SOAPY_SDR_ERROR,"failed to create SoapySDR::Device: %s", kwargs["driver"].c_str());
         conn.rpc->writeInteger(-1);
         delete conn.rpc;
         return 0;
