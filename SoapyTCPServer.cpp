@@ -164,7 +164,19 @@ int createRpc(int sock) {
     conn.log = nullptr;     // ensure we aren't treated as LOG stream
     // read driver and args..
     SoapySDR::Kwargs kwargs;
-    kwargs["driver"] = conn.rpc->readString();
+    std::string drv = conn.rpc->readString();
+    std::string fix = drv;
+    // check for upper-case in driver name, fix and warn
+    bool warn = false;
+    for (auto &c : fix) {
+        if (isupper(c)) {
+            warn = true;
+            c = tolower(c);
+        }
+    }
+    if (warn)
+        SoapySDR_logf(SOAPY_SDR_WARNING,"driver name forced to lower case: %s -> %s",drv.c_str(), fix.c_str());
+    kwargs["driver"] = fix;
     std::string args = conn.rpc->readString();
     // args contains all driver name=value pairs, separated by '/',
     // splitting this is a faff as there is no native method..
