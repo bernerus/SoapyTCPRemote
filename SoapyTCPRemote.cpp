@@ -258,9 +258,16 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
 {
     SoapySDR_logf(SOAPY_SDR_TRACE, "SoapyTCPRemote::setupStream(%d,%s,%d,...)",
         direction, format.c_str(), channels.size());
+    // if no channels were provided, assume channel 0
+    std::vector<size_t> lchannels;
+    if (channels.size()<1) {
+        lchannels.push_back(0);
+    } else {
+        lchannels.insert(lchannels.begin(), channels.begin(), channels.end());
+    }
     // grab the native format
     double fs;
-    std::string fmtnat = getNativeStreamFormat(direction, channels[0], fs);
+    std::string fmtnat = getNativeStreamFormat(direction, lchannels[0], fs);
     // first check we have a frame size for both formats
     if (g_frameSizes.find(format)==g_frameSizes.end()) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "SoapyTCPRemote::setupStream, unknown requested format (%s)", format.c_str());
@@ -307,7 +314,7 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
     sscanf(dir, "%d", &rv->remoteId);
     rv->netSock = data;
     rv->fSize = g_frameSizes.at(fmtwire);
-    rv->numChans = channels.size();
+    rv->numChans = lchannels.size();
     rv->running = false;
     // make the RPC call with the remoteId
     rpc->writeString(TCPREMOTE_RPC_SEP);
@@ -317,7 +324,7 @@ SoapySDR::Stream *SoapyTCPRemote::setupStream(const int direction, const std::st
     rpc->writeString(fmtwire);
     // channel list, sent as a space separated list of numbers on one line
     std::string chans;
-    for (auto it=channels.begin(); it!=channels.end(); ++it) {
+    for (auto it=lchannels.begin(); it!=lchannels.end(); ++it) {
         if (chans.length()>0)
             chans += " ";
         chans += std::to_string(*it);
