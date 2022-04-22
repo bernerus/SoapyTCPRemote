@@ -336,17 +336,17 @@ void *dataPump(void *ctx) {
                     SoapySDR_logf(SOAPY_SDR_WARNING, "dataPump: direct write error: %s", strerror(errno));
                 }
             } else {
-                if (pipewrite((void *)pBuf, fSize, err, conn->netPipe)<0) {
+                if (pipewrite((void *)pBuf, fSize, err, conn->netPipe, false)<0) {
                     SoapySDR_log(SOAPY_SDR_WARNING, "dataPump: overrun network pipe, data loss");
                 }
             }
             conn->dev->releaseReadBuffer(conn->stream, handle);
         }
-		if (!bDirect) {
-        	// final write to ensure netPump wakes up and terminates
-        	pipewrite((void *)".", 1, 1, conn->netPipe);
-        	pthread_join(fpid, nullptr);
-		}
+        if (!bDirect) {
+            // final write to ensure netPump wakes up and terminates
+            pipewrite((void *)".", 1, 1, conn->netPipe, false);
+            pthread_join(fpid, nullptr);
+        }
         free(conn->netPipe);
         // stop the byte flood :=)
         conn->dev->deactivateStream(conn->stream);
@@ -439,7 +439,7 @@ void *dataPump(void *ctx) {
             }
         }
         // final write to ensure netPump wakes up and terminates
-        pipewrite(pbuf, elemSize, 1, conn->netPipe);
+        pipewrite(pbuf, elemSize, 1, conn->netPipe, false);
         pthread_join(fpid, nullptr);
         free(conn->netPipe);
     } else {
@@ -631,12 +631,25 @@ int handleSetupStream(ConnectionInfo &conn) {
     return 0;
 }
 
+int internalStopPumps(ConnectionInfo &data) {
+    if (data.pid) {
+        pthread_t pid = data.pid;
+        data.pid = 0;
+        if (pthread_join(pid, nullptr)) {
+            SoapySDR_logf(SOAPY_SDR_ERROR, "internalStopPumps: failed to join data pump thread: %s", strerror(errno));
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int internalCloseStream(ConnectionInfo &conn, int dataId) {
     if (s_connections.find(dataId)==s_connections.end()) {
         SoapySDR_logf(SOAPY_SDR_WARNING, "closeStream: no such data stream ID: %d", dataId);
         return 0;
     }
     ConnectionInfo &data = s_connections.at(dataId);
+    internalStopPumps(data);
     data.dev->closeStream(data.stream);
     s_connections.erase(dataId);
     close(dataId);
@@ -705,14 +718,10 @@ int handleDeactivateStream(ConnectionInfo &conn) {
     }
     // stop data pump thread
     ConnectionInfo &data = s_connections.at(dataId);
-    pthread_t pid = data.pid;
-    data.pid = 0;
-    if (pthread_join(pid, nullptr)) {
-        SoapySDR_logf(SOAPY_SDR_ERROR, "deactivateStream: failed to join data pump thread: %s", strerror(errno));
+    if (internalStopPumps(data))
         conn.rpc->writeInteger(-2);
-        return 0;
-    }
-    conn.rpc->writeInteger(0);
+    else
+        conn.rpc->writeInteger(0);
     return 0;
 }
 
