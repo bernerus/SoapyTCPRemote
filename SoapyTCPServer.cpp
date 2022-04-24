@@ -9,6 +9,7 @@
 #include <SoapySDR/Device.hpp>
 #include "SoapyRPC.hpp"
 #include "SoapyLog.hpp"
+#include <signal.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -267,11 +268,14 @@ void *netPump(void *ctx) {
     size_t numElems = BUFSIZ/elemSize;
     uint8_t wrbuf[numElems*elemSize];
     int nrd;
-    SoapySDR_logf(SOAPY_SDR_TRACE, "netPump: start: %d", conn->netSock);
+    SoapySDR_logf(SOAPY_SDR_DEBUG, "netPump: start: %d", conn->netSock);
     struct timespec lt;
     clock_gettime(CLOCK_MONOTONIC, &lt);
+    // ignore SIGPIPE, so we get EPIPE returned
+    signal(SIGPIPE, SIG_IGN);
     while ((nrd=piperead(wrbuf, elemSize, numElems, conn->netPipe))>0 && conn->pid!=0) {
-        if (nullptr==getenv("INHIBIT_WRITE") && write(conn->netSock, wrbuf, elemSize*nrd)!=(int)elemSize*nrd) {
+        if (nullptr==getenv("INHIBIT_WRITE") &&
+            write(conn->netSock, wrbuf, elemSize*nrd)!=(int)elemSize*nrd) {
             SoapySDR_logf(SOAPY_SDR_ERROR, "netPump: unable to write to network: %s", strerror(errno));
             break;
         }
@@ -281,12 +285,13 @@ void *netPump(void *ctx) {
             tsdiff(&lt, &ts), conn->netSock, nrd*elemSize);
         lt = ts;
     }
-    SoapySDR_logf(SOAPY_SDR_TRACE, "netPump: stop: %d", conn->netSock);
+    SoapySDR_logf(SOAPY_SDR_DEBUG, "netPump: stop: %d", conn->netSock);
     return nullptr;
 }
 
 void *dataPump(void *ctx) {
     ConnectionInfo *conn = (ConnectionInfo *)ctx;
+    SoapySDR_logf(SOAPY_SDR_DEBUG, "dataPump: start: %d", conn->netSock);
     // first - activate the underlying stream
     if (conn->dev->activateStream(conn->stream)) {
         SoapySDR_log(SOAPY_SDR_ERROR, "dataPump: failed to activate underlying stream");
@@ -350,6 +355,7 @@ void *dataPump(void *ctx) {
         free(conn->netPipe);
         // stop the byte flood :=)
         conn->dev->deactivateStream(conn->stream);
+        SoapySDR_logf(SOAPY_SDR_DEBUG, "dataPump: stop: %d", conn->netSock);
         return nullptr;
     }
     // which direction?
@@ -448,6 +454,7 @@ void *dataPump(void *ctx) {
     }
     // dropping out - deactivate underlying stream
     conn->dev->deactivateStream(conn->stream);
+    SoapySDR_logf(SOAPY_SDR_DEBUG, "dataPump: stop: %d", conn->netSock);
     return nullptr;
 }
 
