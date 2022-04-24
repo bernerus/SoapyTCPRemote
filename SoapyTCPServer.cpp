@@ -28,6 +28,8 @@ struct pipebuf_t {
 
 struct ConnectionInfo
 {
+// default constructor clears all values
+    ConnectionInfo(): rpc(nullptr), dev(nullptr), netSock(0), netPipe(nullptr), direction(0), stream(nullptr), pid(0), log(nullptr), level(SOAPY_SDR_INFO) {}
 // RPC connection bits
     // NB: existance of an rpc object implies this is an RPC connection, otherwise data stream
     SoapyRPC *rpc;
@@ -706,6 +708,7 @@ int handleActivateStream(ConnectionInfo &conn) {
     pthread_t pid;
     if (pthread_create(&pid, &pat, dataPump, &data)) {
         SoapySDR_logf(SOAPY_SDR_ERROR, "activateStream: failed to create data pump thread: %s", strerror(errno));
+        data.pid = 0;
         conn.rpc->writeInteger(-2);
         return 0;
     }
@@ -998,6 +1001,35 @@ int handleGetSampleRateRange(ConnectionInfo &conn) {
     return 0;
 }
 
+int handleHasFrequencyCorrection(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleHasFrequencyCorrection()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeInteger(conn.dev->hasFrequencyCorrection(dir,chn));
+    return 0;    
+}
+
+int handleSetFrequencyCorrection(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleSetFrequencyCorrection()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    double val = conn.rpc->readDouble();
+    conn.dev->setFrequencyCorrection(dir,chn,val);
+    conn.rpc->writeInteger(0);
+    return 0;    
+}
+
+int handleGetFrequencyCorrection(ConnectionInfo &conn) {
+    // pass-thru
+    SoapySDR_log(SOAPY_SDR_DEBUG, "handleGetFrequencyCorrection()");
+    int dir = conn.rpc->readInteger();
+    int chn = conn.rpc->readInteger();
+    conn.rpc->writeDouble(conn.dev->getFrequencyCorrection(dir,chn));
+    return 0;    
+}
+
 int dropRPC(ConnectionInfo &conn, int fd) {
     SoapySDR_logf(SOAPY_SDR_INFO,"Dropping connection: %d", fd);
     delete conn.rpc;
@@ -1122,8 +1154,14 @@ int handleRPC(struct pollfd *pfd, ConnectionInfo &conn) {
         return handleGetSampleRate(conn);
     case TCPREMOTE_GET_SAMPLE_RATE_RANGE:
         return handleGetSampleRateRange(conn);
-    /* NOT IMPLEMENTED ON CLIENT YET!
     // frontend corrections API
+    case TCPREMOTE_HAS_FREQUENCY_CORRECTION:
+        return handleHasFrequencyCorrection(conn);
+    case TCPREMOTE_SET_FREQUENCY_CORRECTION:
+        return handleSetFrequencyCorrection(conn);
+    case TCPREMOTE_GET_FREQUENCY_CORRECTION:
+        return handleGetFrequencyCorrection(conn);
+    /* NOT IMPLEMENTED ON CLIENT YET!
     TCPREMOTE_HAS_DC_OFFSET_MODE,
     TCPREMOTE_SET_DC_OFFSET_MODE,
     TCPREMOTE_GET_DC_OFFSET_MODE,
@@ -1133,9 +1171,6 @@ int handleRPC(struct pollfd *pfd, ConnectionInfo &conn) {
     TCPREMOTE_HAS_IQ_BALANCE,
     TCPREMOTE_SET_IQ_BALANCE,
     TCPREMOTE_GET_IQ_BALANCE,
-    TCPREMOTE_HAS_FREQUENCY_CORRECTION,
-    TCPREMOTE_SET_FREQUENCY_CORRECTION,
-    TCPREMOTE_GET_FREQUENCY_CORRECTION,
     // bandwidth API
     TCPREMOTE_SET_BANDWIDTH,
     TCPREMOTE_GET_BANDWIDTH,

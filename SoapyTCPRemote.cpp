@@ -498,6 +498,37 @@ int SoapyTCPRemote::readStreamStatus(
     return SOAPY_SDR_NOT_SUPPORTED;
 }
 
+bool SoapyTCPRemote::hasFrequencyCorrection(const int direction, const size_t channel) const
+{
+    SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::hasFrequencyCorrection()");
+    rpc->writeString(TCPREMOTE_RPC_SEP);
+    rpc->writeInteger(TCPREMOTE_HAS_FREQUENCY_CORRECTION);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    return rpc->readInteger()!=0;
+}
+
+void SoapyTCPRemote::setFrequencyCorrection(const int direction, const size_t channel, double value)
+{
+    SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::setFrequencyCorrection()");
+    rpc->writeString(TCPREMOTE_RPC_SEP);
+    rpc->writeInteger(TCPREMOTE_SET_FREQUENCY_CORRECTION);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    rpc->writeDouble(value);
+    rpc->readInteger(); // wait for completion!
+}
+
+double SoapyTCPRemote::getFrequencyCorrection(const int direction, const size_t channel) const
+{
+    SoapySDR_log(SOAPY_SDR_TRACE, "SoapyTCPRemote::getFrequencyCorrection()");
+    rpc->writeString(TCPREMOTE_RPC_SEP);
+    rpc->writeInteger(TCPREMOTE_GET_FREQUENCY_CORRECTION);
+    rpc->writeInteger(direction);
+    rpc->writeInteger(channel);
+    return rpc->readDouble();
+}
+
 std::vector<std::string> SoapyTCPRemote::listGains(const int direction, const size_t channel) const
 {
     //list available gain element names,
@@ -507,7 +538,7 @@ std::vector<std::string> SoapyTCPRemote::listGains(const int direction, const si
     rpc->writeInteger(TCPREMOTE_LIST_GAINS);
     rpc->writeInteger(direction);
     rpc->writeInteger(channel);
-     return rpc->readStrVector();
+    return rpc->readStrVector();
 }
 
 bool SoapyTCPRemote::hasGainMode(const int direction, const size_t channel) const

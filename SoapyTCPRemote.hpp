@@ -93,12 +93,14 @@ public:
     // Antennas (not yet!)
     std::vector<std::string> listAntennas(const int direction, const size_t channel) const { std::vector<std::string> l; return l; }
 
-    // DC offset, IQ balance & Frequency correction (not yet!)
+    // DC offset, IQ balance & Frequency correction (only frequency so far)
     bool hasDCOffsetMode(const int direction, const size_t channel) const { return false; }
     bool hasDCOffset(const int direction, const size_t channel) const { return false; }
     bool hasIQBalanceMode(const int direction, const size_t channel) const { return false; }
     bool hasIQBalance(const int direction, const size_t channel) const { return false; }
-    bool hasFrequencyCorrection(const int direction, const size_t channel) const { return false; }
+    bool hasFrequencyCorrection(const int direction, const size_t channel) const;
+    void setFrequencyCorrection(const int direction, const size_t channel, double value);
+    double getFrequencyCorrection(const int direction, const size_t channel) const;
 
     // Gain (all remote)
     std::vector<std::string> listGains(const int direction, const size_t channel) const;
