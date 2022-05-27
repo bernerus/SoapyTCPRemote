@@ -4,7 +4,11 @@
 cmake_minimum_required(VERSION 2.8.7)
 project(SoapyTCPRemote CXX C)
 
-find_package(SoapySDR "0.6.0" NO_MODULE)
+if (BACKPORT)
+    find_package(SoapySDR "0.7.2" EXACT NO_MODULE)
+else()
+    find_package(SoapySDR "0.6.0" NO_MODULE)
+endif()
 if (NOT SoapySDR_FOUND)
     message(FATAL_ERROR "Soapy SDR development files not found...") 
 endif ()
