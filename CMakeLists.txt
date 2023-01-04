@@ -1,7 +1,8 @@
 ######################################################################## 
 # Build Soapy SDR support module for simple TCP remote RX pipe
 ######################################################################## 
-cmake_minimum_required(VERSION 2.8.7)
+set (CMAKE_CXX_STANDARD 11)
+# cmake_minimum_required(VERSION 2.8.7)
 project(SoapyTCPRemote CXX C)
 
 if (BACKPORT)
