@@ -697,7 +697,7 @@ int handleActivateStream(ConnectionInfo &conn) {
     }
     // start data pump thread
     ConnectionInfo &data = s_connections.at(dataId);
-    data.pid = -1;  // non-zero, to prevent thread terminating if it's scheduled before we can copy in real value!
+    data.pid = reinterpret_cast<pthread_t>(-1);  // non-zero, to prevent thread terminating if it's scheduled before we can copy in real value!
     // create ourselves a real-time thread to read the data..
     pthread_attr_t pat;
     pthread_attr_init(&pat);
